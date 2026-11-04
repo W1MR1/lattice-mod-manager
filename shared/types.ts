@@ -94,6 +94,8 @@ export interface GameDef {
   notes?: string;
   /** game domain on Nexus Mods, e.g. "skyrimspecialedition" */
   nexusDomain?: string;
+  /** GitHub search stays within the game: words every hit must mention, and a curated list */
+  github?: { keywords: string; featured?: { repo: string; requires?: string[] }[] };
   /** Bethesda load order: plugins.txt under %LOCALAPPDATA%\<folder> */
   pluginsTxt?: { folder: string; baseMasters: string[] };
 }
@@ -219,7 +221,8 @@ export type IssueCode =
   | 'collection-conflict'
   | 'unresolvable'
   | 'recommended'
-  | 'missing-master';
+  | 'missing-master'
+  | 'duplicate';
 
 export interface Fix {
   kind: 'install' | 'enable' | 'disable' | 'update' | 'add-rule' | 'apply-collection';
@@ -344,6 +347,8 @@ export interface Settings {
   nexusUser?: { name: string; premium: boolean };
   /** open nxm:// links ("Mod manager download" on Nexus) in Lattice */
   handleNxm: boolean;
+  /** "don't offer for 7 days": no update prompt before this time (ms) */
+  updateSnoozedUntil?: number;
 }
 
 export interface AppState {
@@ -377,7 +382,20 @@ export interface DetectedGame {
   via: 'steam' | 'default';
 }
 
+/** Something found wrong at start, with or without an automatic fix. */
+export interface HealthProblem {
+  id: string;
+  title: string;
+  detail: string;
+  fixable: boolean;
+  gameId?: string;
+  profileId?: string;
+  keys?: string[];
+}
+
 export interface DeployResult {
+  /** folder the files went to */
+  root?: string;
   deployed: number;
   removed: number;
   backedUp: number;

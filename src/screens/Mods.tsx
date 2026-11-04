@@ -4,10 +4,11 @@ import type { CompatReport, Fix, FomodPrompt, InstalledMod, Issue, Profile } fro
 import { FomodWizard } from '../sheets/FomodWizard';
 import { keyOf } from '../../shared/types';
 import { api, bridge } from '../api';
-import { ago, plural, SOURCE_LABEL } from '../format';
+import { ago, SOURCE_LABEL } from '../format';
 import { useActive, useUI } from '../store';
-import { Empty, ModIcon, Modal, SevIcon, StatusChip, Switch, sevTone } from '../components/ui';
+import { Empty, ModIcon, SevIcon, StatusChip, Switch, sevTone } from '../components/ui';
 import { CollectionSheet } from '../sheets/CollectionSheet';
+import { RemoveSheet } from '../sheets/RemoveSheet';
 
 type Filter = 'all' | 'issues' | 'off' | 'deps';
 
@@ -30,6 +31,7 @@ export function ModStatus({ m, report }: { m: InstalledMod; report: CompatReport
     'incompatible-loader': 'Другой загрузчик',
     'file-conflict': 'Перезапись файлов',
     'missing-master': 'Нет мастер-файла',
+    duplicate: 'Дубликат',
   };
   return (
     <StatusChip tone={sevTone(worst.severity)} title={worst.message}>
@@ -59,6 +61,8 @@ export function Mods() {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [collSheet, setCollSheet] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [removing, setRemoving] = useState<{ keys: string[]; all?: boolean } | null>(null);
 
   const mods = useMemo(() => {
     if (!profile) return [];
@@ -132,6 +136,20 @@ export function Mods() {
           <button className="btn" disabled={total === 0} onClick={() => setCollSheet(true)}>
             <Library size={15} /> В коллекцию
           </button>
+          {checked.size > 0 ? (
+            <>
+              <button className="btn danger" onClick={() => setRemoving({ keys: [...checked] })}>
+                <Trash2 size={15} /> Удалить выбранные ({checked.size})
+              </button>
+              <button className="btn ghost" onClick={() => setChecked(new Set())}>
+                Снять выбор
+              </button>
+            </>
+          ) : (
+            <button className="btn ghost danger" disabled={total === 0} onClick={() => setRemoving({ keys: Object.keys(profile.mods), all: true })}>
+              <Trash2 size={15} /> Удалить все…
+            </button>
+          )}
         </div>
 
         {top.length > 0 && (
@@ -171,6 +189,14 @@ export function Mods() {
             <table className="table">
               <thead>
                 <tr>
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Выбрать все моды в списке"
+                      checked={mods.length > 0 && mods.every((m) => checked.has(m.key))}
+                      onChange={(e) => setChecked(e.target.checked ? new Set([...checked, ...mods.map((m) => m.key)]) : new Set([...checked].filter((k) => !mods.some((m) => m.key === k))))}
+                    />
+                  </th>
                   <th style={{ width: 44 }}>
                     <span className="sr-only">Включён</span>
                   </th>
@@ -183,7 +209,21 @@ export function Mods() {
               </thead>
               <tbody>
                 {mods.map((m) => (
-                  <ModRow key={m.key} m={m} profile={profile} report={report} selected={m.key === selected} onSelect={() => select(m.key === selected ? null : m.key)} />
+                  <ModRow
+                    key={m.key}
+                    m={m}
+                    profile={profile}
+                    report={report}
+                    selected={m.key === selected}
+                    checked={checked.has(m.key)}
+                    onCheck={(v) => {
+                      const next = new Set(checked);
+                      if (v) next.add(m.key);
+                      else next.delete(m.key);
+                      setChecked(next);
+                    }}
+                    onSelect={() => select(m.key === selected ? null : m.key)}
+                  />
                 ))}
               </tbody>
             </table>
@@ -191,13 +231,40 @@ export function Mods() {
           </div>
         )}
       </div>
-      {sel && <ModInspector m={sel} profile={profile} report={report} />}
+      {sel && <ModInspector m={sel} profile={profile} report={report} onRemove={() => setRemoving({ keys: [sel.key] })} />}
+      {removing && (
+        <RemoveSheet
+          profileId={profile.id}
+          keys={removing.keys}
+          all={removing.all}
+          onClose={() => {
+            setRemoving(null);
+            setChecked(new Set());
+          }}
+        />
+      )}
       {collSheet && <CollectionSheet profileId={profile.id} onClose={() => setCollSheet(false)} />}
     </div>
   );
 }
 
-function ModRow({ m, profile, report, selected, onSelect }: { m: InstalledMod; profile: Profile; report: CompatReport | null; selected: boolean; onSelect: () => void }) {
+function ModRow({
+  m,
+  profile,
+  report,
+  selected,
+  checked,
+  onCheck,
+  onSelect,
+}: {
+  m: InstalledMod;
+  profile: Profile;
+  report: CompatReport | null;
+  selected: boolean;
+  checked: boolean;
+  onCheck: (v: boolean) => void;
+  onSelect: () => void;
+}) {
   const run = useUI((s) => s.run);
   const requires = m.deps.filter((d) => d.kind === 'requires').length;
   const dependents = report?.dependents[m.key]?.length ?? 0;
@@ -205,6 +272,9 @@ function ModRow({ m, profile, report, selected, onSelect }: { m: InstalledMod; p
   const inColl = m.requiredBy.filter((r) => r.startsWith('collection:')).length;
   return (
     <tr aria-selected={selected} className={m.enabled ? '' : 'disabled'} onClick={onSelect}>
+      <td onClick={(e) => e.stopPropagation()}>
+        <input type="checkbox" checked={checked} aria-label={`Выбрать «${m.title}»`} onChange={(e) => onCheck(e.target.checked)} />
+      </td>
       <td>
         <Switch on={m.enabled} label={`Включить «${m.title}»`} onChange={(v) => run(() => api.setEnabled(profile.id, m.key, v))} />
       </td>
@@ -248,12 +318,11 @@ function ModRow({ m, profile, report, selected, onSelect }: { m: InstalledMod; p
   );
 }
 
-function ModInspector({ m, profile, report }: { m: InstalledMod; profile: Profile; report: CompatReport | null }) {
+function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profile: Profile; report: CompatReport | null; onRemove: () => void }) {
   const { state } = useActive();
   const select = useUI((s) => s.select);
   const run = useUI((s) => s.run);
   const openPlan = useUI((s) => s.openPlan);
-  const [confirm, setConfirm] = useState<string[] | null>(null);
   const [ruleOther, setRuleOther] = useState('');
   const [ruleKind, setRuleKind] = useState<'after' | 'before'>('after');
   const [linkOther, setLinkOther] = useState('');
@@ -271,15 +340,6 @@ function ModInspector({ m, profile, report }: { m: InstalledMod; profile: Profil
   const collections = m.requiredBy.filter((r) => r.startsWith('collection:')).map((r) => state?.collections.find((c) => c.id === r.slice(11))?.name ?? r.slice(11));
   const rules = profile.rules.filter((r) => r.subject === m.key || r.other === m.key);
   const others = Object.values(profile.mods).filter((x) => x.key !== m.key);
-
-  const remove = async (cascade: boolean) => {
-    const res = await run(() => api.removeMod(profile.id, m.key, cascade));
-    if (!res) return;
-    if (res.blockedBy.length) return setConfirm(res.blockedBy);
-    setConfirm(null);
-    select(null);
-    useUI.getState().toast('ok', `Удалено: ${plural(res.removed.length, 'мод', 'мода', 'модов')}${res.removed.length > 1 ? ' (вместе с ненужными зависимостями)' : ''}`);
-  };
 
   return (
     <aside className="inspector" aria-label={`Мод ${m.title}`}>
@@ -475,7 +535,7 @@ function ModInspector({ m, profile, report }: { m: InstalledMod; profile: Profil
           </button>
         )}
         <span className="grow" />
-        <button className="btn danger" onClick={() => remove(false)}>
+        <button className="btn danger" onClick={onRemove}>
           <Trash2 size={14} /> Удалить
         </button>
       </div>
@@ -488,33 +548,6 @@ function ModInspector({ m, profile, report }: { m: InstalledMod; profile: Profil
             void run(() => api.reinstallWithChoices(profile.id, m.key, c[m.key]));
           }}
         />
-      )}
-      {confirm && (
-        <Modal
-          title={`Удалить «${m.title}»?`}
-          sub="На него опираются другие моды. Без него они не запустятся."
-          size="sm"
-          onClose={() => setConfirm(null)}
-          foot={
-            <>
-              <span className="grow" />
-              <button className="btn ghost" onClick={() => setConfirm(null)}>
-                Отмена
-              </button>
-              <button className="btn danger" onClick={() => remove(true)}>
-                Удалить вместе с зависимыми ({confirm.length + 1})
-              </button>
-            </>
-          }
-        >
-          <div className="link-list">
-            {confirm.map((k) => (
-              <div className="link-item" key={k}>
-                <CornerLeftUp size={14} /> {title(k)}
-              </div>
-            ))}
-          </div>
-        </Modal>
       )}
     </aside>
   );

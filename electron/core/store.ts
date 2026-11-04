@@ -41,6 +41,8 @@ export function defaultSettings(dataRoot: string): Settings {
 
 export class Store {
   state: Persisted;
+  /** true when state.json was unreadable and the last good copy was loaded */
+  recovered = false;
   private timer: NodeJS.Timeout | null = null;
   private writing: Promise<void> = Promise.resolve();
 
@@ -49,16 +51,23 @@ export class Store {
     dataRoot: string,
   ) {
     const empty: Persisted = { games: [], profiles: [], collections: [], snapshots: [], settings: defaultSettings(dataRoot), local: {} };
-    if (existsSync(file)) {
+    const read = (f: string): Persisted | null => {
       try {
-        const loaded = JSON.parse(readFileSync(file, 'utf8')) as Partial<Persisted>;
+        const loaded = JSON.parse(readFileSync(f, 'utf8')) as Partial<Persisted>;
         const settings = { ...empty.settings, ...loaded.settings };
         settings.enabledSources = { ...empty.settings.enabledSources, ...loaded.settings?.enabledSources };
-        this.state = { ...empty, ...loaded, settings };
+        return { ...empty, ...loaded, settings };
       } catch {
-        this.state = empty;
+        return null;
       }
-    } else this.state = empty;
+    };
+    if (!existsSync(file)) this.state = empty;
+    else {
+      const main = read(file);
+      const backup = main ? null : read(`${file}.bak`);
+      this.recovered = !main && !!backup;
+      this.state = main ?? backup ?? empty;
+    }
   }
 
   save() {
@@ -76,6 +85,8 @@ export class Store {
       await fs.mkdir(path.dirname(this.file), { recursive: true });
       const tmp = `${this.file}.tmp`;
       await fs.writeFile(tmp, data);
+      // the last good file becomes the backup a broken write can fall back to
+      await fs.copyFile(this.file, `${this.file}.bak`).catch(() => undefined);
       await fs.rename(tmp, this.file);
     });
     return this.writing;

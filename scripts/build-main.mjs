@@ -13,7 +13,7 @@ const common = {
   format: 'cjs',
   sourcemap: true,
   // native binaries and wasm are loaded relative to their own package folder
-  external: ['electron', '7zip-bin', 'node-unrar-js'],
+  external: ['electron', '7zip-bin', 'node-unrar-js', 'electron-updater'],
   logLevel: 'info',
   // release facts: the version Nexus sees, and the Nexus app slug once registered
   define: {

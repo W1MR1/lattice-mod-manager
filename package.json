@@ -1,7 +1,7 @@
 {
   "name": "lattice-mod-manager",
   "productName": "Lattice",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Менеджер модов и коллекций с графом совместимости и многопоточными загрузками там, где источник это разрешает",
   "author": "Lattice contributors",
   "license": "GPL-3.0-or-later",
@@ -15,7 +15,7 @@
     "start": "electron .",
     "smoke": "npm run build && electron . --smoke",
     "icon": "electron scripts/make-icon.cjs",
-    "dist": "npm run build && electron-builder --win --x64",
+    "dist": "npm run build && electron-builder --win --x64 --publish never",
     "demo": "vite --config vite.demo.config.ts",
     "build:demo": "vite build --config vite.demo.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "7zip-bin": "5.2.0",
+    "electron-updater": "6.8.11",
     "node-unrar-js": "2.0.2"
   },
   "devDependencies": {
@@ -83,6 +84,13 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "Lattice"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "W1MR1",
+        "repo": "lattice-mod-manager"
+      }
+    ]
   }
 }

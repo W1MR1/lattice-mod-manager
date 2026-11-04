@@ -30,12 +30,12 @@ import type {
   Settings,
   Snapshot,
 } from '../../shared/types';
-import type { FomodPrompt, GameDef } from '../../shared/types';
+import type { FomodPrompt, GameDef, HealthProblem } from '../../shared/types';
 import { keyOf } from '../../shared/types';
 import { defaultChoices, validateChoices, type FileState, type FomodChoices } from '../../shared/fomod';
 import { checkCompatibility, type PluginCheck, type PluginInfo } from './compat';
 import { collectionClosure, fromProfile, importMrpack, parseCollection, slugId, type CollectionMeta } from './collections';
-import { computeOverlaps, deploy, forgetStaged, purge } from './deployer';
+import { computeOverlaps, deploy, forgetStaged, purge, verifyDeployment } from './deployer';
 import { DownloadManager } from './downloader';
 import { detectGames, GAME_DEFS, gameDef } from './games';
 import { FomodRequired, inspectFomod, STAGED_PREFIX, safeName, stageVersion, walk } from './installer';
@@ -45,6 +45,11 @@ import { resolvePlan, type ProjectMeta } from './resolver';
 import { Sources } from './sources';
 import { parseNexusUrl, parseNxm, type NxmLink } from './sources/nexus';
 import { Store } from './store';
+import { collectOrphans, recomputeLinks } from './links';
+import { applyRemoval, planRemoval, type RemovalOptions } from './removal';
+import { scanLeftovers, type Leftover } from './cleanup';
+import { findMinecraftLauncher, gameLaunchTarget, installMinecraftLoader, isOfficialMinecraftDir, type LaunchTarget } from './launch';
+export { collectOrphans, recomputeLinks } from './links';
 import { NEXUS_SLUG } from './app-info';
 import { nexusSso } from './nexus-sso';
 
@@ -77,6 +82,10 @@ export class Service extends EventEmitter {
     private secrets: Secrets = plainSecrets,
     /** opens a page in the user's browser (Nexus sign-in) */
     private openBrowser: (url: string) => void | Promise<void> = () => undefined,
+    /** starts a game: through Steam or an executable (main checks both) */
+    private launcher: (t: LaunchTarget) => Promise<void> = async () => {
+      throw new Error('Запуск игр недоступен');
+    },
   ) {
     super();
     this.store = new Store(stateFile, dataRoot);
@@ -640,25 +649,84 @@ export class Service extends EventEmitter {
   }
 
   async removeMod(profileId: string, key: string, cascade = false): Promise<{ removed: string[]; blockedBy: string[] }> {
+    const r = await this.removeMods(profileId, [key], { withDeps: true, withDependents: cascade });
+    return { removed: r.removed, blockedBy: r.blockedBy };
+  }
+
+  /** What a removal would take with it, for the confirmation dialog. */
+  previewRemoval(profileId: string, keys: string[], opts: RemovalOptions) {
     const p = this.profile(profileId);
-    if (!p.mods[key]) return { removed: [], blockedBy: [] };
-    const blockedBy = this.dependentsOf(profileId, key);
-    if (blockedBy.length && !cascade) return { removed: [], blockedBy };
-    this.snapshot(profileId, `Перед удалением «${p.mods[key].title}»`);
-    const queue = [key];
-    const gone = new Set<string>();
-    while (queue.length) {
-      const k = queue.shift()!;
-      if (gone.has(k) || !p.mods[k]) continue;
-      if (cascade) queue.push(...this.dependentsOf(profileId, k));
-      gone.add(k);
-      delete p.mods[k];
-    }
-    p.rules = p.rules.filter((r) => p.mods[r.subject] && p.mods[r.other]);
-    const orphans = collectOrphans(p);
+    const plan = planRemoval(p, keys, opts);
+    const t = (k: string) => ({ key: k, title: p.mods[k]?.title ?? k });
+    return { remove: plan.remove.map(t), dependents: plan.dependents.map(t), deps: plan.deps.map(t) };
+  }
+
+  /**
+   * Removes mods. Blocked while enabled mods depend on them, unless those go too.
+   * With `thorough`, also returns what the mods left behind (staged copies,
+   * downloads, settings files) for the user to confirm; nothing more is deleted yet.
+   */
+  async removeMods(
+    profileId: string,
+    keys: string[],
+    opts: RemovalOptions & { thorough?: boolean },
+  ): Promise<{ removed: string[]; blockedBy: string[]; leftovers: Leftover[] }> {
+    const p = this.profile(profileId);
+    const plan = planRemoval(p, keys, opts);
+    if (plan.dependents.length && !opts.withDependents) return { removed: [], blockedBy: plan.dependents, leftovers: [] };
+    if (plan.remove.length === 0) return { removed: [], blockedBy: [], leftovers: [] };
+    this.snapshot(profileId, plan.remove.length === 1 ? `Перед удалением «${p.mods[plan.remove[0]].title}»` : `Перед удалением модов (${plan.remove.length})`);
+    const gone = [...plan.remove, ...(opts.withDeps ? plan.deps : [])].map((k) => p.mods[k]).filter(Boolean);
+    applyRemoval(p, plan, opts);
     this.changed();
     await this.deploy(profileId).catch(() => undefined);
-    return { removed: [...gone, ...orphans], blockedBy: [] };
+    const leftovers = opts.thorough ? await this.findLeftovers(p.gameId, gone) : [];
+    return { removed: gone.map((m) => m.key), blockedBy: [], leftovers };
+  }
+
+  /** Every mod of the profile, with everything that came with them. */
+  removeAllMods(profileId: string, thorough = false) {
+    return this.removeMods(profileId, Object.keys(this.profile(profileId).mods), { withDeps: true, withDependents: true, thorough });
+  }
+
+  private pendingLeftovers = new Map<string, number>();
+
+  private async findLeftovers(gameId: string, mods: InstalledMod[]): Promise<Leftover[]> {
+    const game = this.game(gameId);
+    // whatever any profile still uses stays
+    const inUse = new Set<string>();
+    for (const prof of this.store.state.profiles) {
+      for (const m of Object.values(prof.mods)) {
+        if (m.stagedPath) inUse.add(path.resolve(m.stagedPath).toLowerCase());
+        for (const f of m.files) if (/^https?:|^nexus:/.test(f.url)) inUse.add(path.resolve(path.dirname(this.cachePath(f))).toLowerCase());
+      }
+    }
+    const list = await scanLeftovers({
+      mods,
+      def: this.defOf(game),
+      installPath: game.installPath,
+      stagingRoot: this.dir('staging', game.id),
+      cachePathOf: (f) => this.cachePath(f),
+      inUse,
+    });
+    this.pendingLeftovers = new Map(list.map((l) => [path.resolve(l.path).toLowerCase(), l.size]));
+    return list;
+  }
+
+  /** Deletes the leftovers the user confirmed; only paths from the last scan are accepted. */
+  async deleteLeftovers(paths: string[]): Promise<{ deleted: number; freed: number }> {
+    let deleted = 0;
+    let freed = 0;
+    for (const p of paths) {
+      const k = path.resolve(p).toLowerCase();
+      const size = this.pendingLeftovers.get(k);
+      if (size === undefined) continue;
+      await fs.rm(p, { recursive: true, force: true });
+      this.pendingLeftovers.delete(k);
+      deleted++;
+      freed += size;
+    }
+    return { deleted, freed };
   }
 
   async addRule(profileId: string, rule: OrderRule) {
@@ -844,8 +912,153 @@ export class Service extends EventEmitter {
     }
     p.deployedAt = new Date().toISOString();
     this.changed();
-    this.emit('deployed', { profileId, ...res });
-    return res;
+    const out = { ...res, root: this.deployRoot(game) };
+    this.emit('deployed', { profileId, ...out });
+    return out;
+  }
+
+  /**
+   * Starts the game with the active profile's mods: deploys first, then for
+   * Minecraft puts the Fabric/Quilt loader into the official launcher and opens
+   * it; other games start through Steam or their script extender.
+   */
+  async launchGame(gameId: string): Promise<{ note: string }> {
+    const game = this.game(gameId);
+    const def = this.defOf(game);
+    const p = this.profile(game.activeProfileId);
+    await this.deploy(p.id);
+    if (def.kind === 'minecraft') {
+      if (!(await isOfficialMinecraftDir(game.installPath))) {
+        throw new Error('Это папка стороннего лаунчера (Prism, MultiMC, TLauncher и т. п.): моды уже лежат в её mods/, запустите этот экземпляр в самом лаунчере.');
+      }
+      if (!p.context.gameVersion) throw new Error('Укажите версию Minecraft у профиля (Настройки → профиль), чтобы поставить загрузчик под неё.');
+      const res = await installMinecraftLoader(game.installPath, p.context.gameVersion, p.context.loader ?? 'fabric', p.id, p.name);
+      const exe = await findMinecraftLauncher();
+      if (!exe) return { note: `Профиль «${res.profileName}» добавлен в лаунчер Minecraft. Откройте лаунчер, выберите этот профиль и нажмите «Играть».` };
+      await this.launcher({ kind: 'exe', path: exe });
+      return { note: `Открываем лаунчер Minecraft: выберите профиль «${res.profileName}» и нажмите «Играть».` };
+    }
+    const target = await gameLaunchTarget(def, game.installPath);
+    await this.launcher(target);
+    return { note: target.kind === 'steam' ? `Запускаем ${game.name} через Steam` : `Запускаем ${path.basename(target.path)}` };
+  }
+
+  /** Points a game at a new folder (it was moved); the old folder is cleaned first when it still exists. */
+  async setGamePath(gameId: string, installPath: string) {
+    const game = this.game(gameId);
+    const st = await fs.stat(installPath).catch(() => null);
+    if (!st?.isDirectory()) throw new Error('Папка не найдена');
+    if (await fs.stat(game.installPath).catch(() => null)) await this.purge(gameId).catch(() => 0);
+    game.installPath = installPath;
+    this.changed();
+    await this.deploy(game.activeProfileId).catch((e) => this.toast('err', (e as Error).message));
+  }
+
+  // ---------- integrity
+
+  /** Problems worth fixing at start: missing files, broken deployment, contradicting rules, half downloads. */
+  async healthCheck(): Promise<HealthProblem[]> {
+    const out: HealthProblem[] = [];
+    if (this.store.recovered) {
+      out.push({ id: 'state-recovered', title: 'Файл настроек Lattice был повреждён', detail: 'Загружена последняя исправная копия. Проверьте, все ли игры и профили на месте.', fixable: false });
+    }
+    for (const game of this.store.state.games) {
+      if (!(await fs.stat(game.installPath).catch(() => null))?.isDirectory()) {
+        out.push({ id: `folder:${game.id}`, title: `${game.name}: папка игры не найдена`, detail: `${game.installPath} — игру переместили или удалили. Укажите новую папку в настройках.`, fixable: false, gameId: game.id });
+        continue;
+      }
+      const p = this.store.state.profiles.find((x) => x.id === game.activeProfileId);
+      if (!p) continue;
+      const missing: InstalledMod[] = [];
+      for (const m of Object.values(p.mods)) if (!(await fs.stat(m.stagedPath).catch(() => null))) missing.push(m);
+      if (missing.length) {
+        out.push({
+          id: `staging:${p.id}`,
+          title: `${game.name}: пропали файлы модов (${missing.length})`,
+          detail: `${missing.slice(0, 4).map((m) => `«${m.title}»`).join(', ')}${missing.length > 4 ? '…' : ''}. Lattice скачает и подготовит их заново.`,
+          fixable: true,
+          profileId: p.id,
+          keys: missing.map((m) => m.key),
+        });
+      }
+      const { cycles } = computeOrder(Object.values(p.mods), p.rules);
+      if (cycles.length) {
+        out.push({
+          id: `cycle:${p.id}`,
+          title: `${game.name}: правила порядка загрузки противоречат друг другу`,
+          detail: cycles.map((c) => c.map((k) => `«${p.mods[k]?.title ?? k}»`).join(' → ')).join('; ') + '. Lattice уберёт противоречащие правила.',
+          fixable: true,
+          profileId: p.id,
+        });
+      }
+      if (p.deployedAt) {
+        const v = await verifyDeployment(this.dir('deploy', game.id, 'manifest.json'), this.deployRoot(game));
+        if (v.missing.length) {
+          out.push({
+            id: `deploy:${p.id}`,
+            title: `${game.name}: в папке игры не хватает файлов модов (${v.missing.length})`,
+            detail: 'Их удалили вручную или игра обновилась. Lattice разложит их заново.',
+            fixable: true,
+            profileId: p.id,
+          });
+        }
+      }
+    }
+    const busy = this.downloads.list().some((d) => ['queued', 'probing', 'downloading', 'paused', 'verifying'].includes(d.state));
+    const parts = busy ? [] : (await walk(this.dir('downloads')).catch(() => [] as string[])).filter((r) => r.endsWith('.part'));
+    if (parts.length) {
+      out.push({ id: 'parts', title: 'Недокачанные файлы в кэше загрузок', detail: `${parts.length} шт. остались от прерванных загрузок и только занимают место.`, fixable: true });
+    }
+    return out;
+  }
+
+  async repair(ids: string[]): Promise<{ fixed: string[]; failed: { id: string; error: string }[] }> {
+    const fixed: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+    for (const pr of (await this.healthCheck()).filter((x) => ids.includes(x.id) && x.fixable)) {
+      try {
+        if (pr.id.startsWith('staging:')) await this.restage(pr.profileId!, pr.keys ?? []);
+        else if (pr.id.startsWith('cycle:')) {
+          const p = this.profile(pr.profileId!);
+          const { cycles } = computeOrder(Object.values(p.mods), p.rules);
+          const inCycle = cycles.map((c) => new Set(c));
+          p.rules = p.rules.filter((r) => !inCycle.some((c) => c.has(r.subject) && c.has(r.other)));
+          this.changed();
+          await this.deploy(p.id).catch(() => undefined);
+        } else if (pr.id.startsWith('deploy:')) await this.deploy(pr.profileId!);
+        else if (pr.id === 'parts') {
+          for (const r of (await walk(this.dir('downloads'))).filter((x) => x.endsWith('.part'))) await fs.rm(this.dir('downloads', r), { force: true });
+        }
+        fixed.push(pr.id);
+      } catch (e) {
+        failed.push({ id: pr.id, error: (e as Error).message });
+      }
+    }
+    return { fixed, failed };
+  }
+
+  /** Downloads and stages mods again whose staged copies are gone. */
+  private async restage(profileId: string, keys: string[]) {
+    const p = this.profile(profileId);
+    const game = this.game(p.gameId);
+    const def = this.defOf(game);
+    const errors: string[] = [];
+    for (const key of keys) {
+      const m = p.mods[key];
+      if (!m) continue;
+      try {
+        if (m.files.some((f) => f.url.startsWith(STAGED_PREFIX))) throw new Error('файлы сборки можно вернуть только повторным импортом коллекции');
+        const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title)));
+        const res = await stageVersion(def, installedVersion(m), paths, this.dir('staging', game.id), { choices: m.choices });
+        forgetStaged(res.stagedPath);
+        m.stagedPath = res.stagedPath;
+      } catch (e) {
+        errors.push(`«${m.title}»: ${(e as Error).message}`);
+      }
+    }
+    this.changed();
+    if (game.activeProfileId === profileId) await this.deploy(profileId).catch(() => undefined);
+    if (errors.length) throw new Error(errors.join('\n'));
   }
 
   async purge(gameId: string): Promise<number> {
@@ -1042,37 +1255,3 @@ function sameRule(a: OrderRule, b: OrderRule) {
   return a.subject === b.subject && a.kind === b.kind && a.other === b.other;
 }
 
-/** Rebuilds `requiredBy` from the actual dependency declarations and applied collections. */
-export function recomputeLinks(profile: Profile) {
-  const mods = Object.values(profile.mods);
-  const providers = providerIndex(mods);
-  const requirers = new Map<string, Set<string>>();
-  for (const m of mods) {
-    for (const d of m.deps) {
-      if (d.kind !== 'requires') continue;
-      for (const p of providers.get(keyOf(d.ref)) ?? []) {
-        if (p.key === m.key) continue;
-        if (!requirers.has(p.key)) requirers.set(p.key, new Set());
-        requirers.get(p.key)!.add(m.key);
-      }
-    }
-  }
-  for (const m of mods) {
-    const markers = m.requiredBy.filter((r) => r.startsWith('collection:') && profile.collections.includes(r.slice('collection:'.length)));
-    m.requiredBy = [...new Set(markers), ...(requirers.get(m.key) ?? [])];
-  }
-}
-
-/** Removes mods that were pulled in automatically and are no longer needed by anything. */
-export function collectOrphans(profile: Profile): string[] {
-  const removed: string[] = [];
-  for (;;) {
-    recomputeLinks(profile);
-    const orphan = Object.values(profile.mods).filter((m) => m.reason !== 'explicit' && m.requiredBy.length === 0);
-    if (orphan.length === 0) return removed;
-    for (const m of orphan) {
-      delete profile.mods[m.key];
-      removed.push(m.key);
-    }
-  }
-}

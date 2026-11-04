@@ -4,6 +4,7 @@ import type { DepDecl, GameContext, ModFile, ModProject, ModRef, ModVersion, Sea
 import type { ProjectMeta } from '../resolver';
 import { getJson } from '../http';
 import type { SourceAdapter } from './types';
+import { GAME_DEFS, gameDef } from '../games';
 
 const API = 'https://api.github.com';
 
@@ -38,6 +39,19 @@ export interface LatticeManifest {
 
 const ARCHIVE = /\.(zip|7z|jar|rar|dll|pak|esp|esm|esl|ba2|bsa)$/i;
 const NOT_PRIMARY = /(sources|javadoc|dev|debug|symbols|pdb)/i;
+const OTHER_OS = /(macos|darwin|osx|linux|aarch64)/i;
+
+/** Requirements known for curated repositories that ship no lattice.json. */
+function curatedRequires(repo: string): string[] {
+  for (const d of GAME_DEFS) for (const f of d.github?.featured ?? []) if (f.repo.toLowerCase() === repo.toLowerCase()) return f.requires ?? [];
+  return [];
+}
+
+/** A search limited to one game: every hit must also mention the game. */
+export function githubQuery(text: string, keywords: string | undefined): string {
+  const words = [text.trim() || 'mod', keywords ?? ''].filter(Boolean).join(' ');
+  return `${words} in:name,description,topics`;
+}
 
 export class GithubSource implements SourceAdapter {
   constructor(private token: () => string | undefined) {}
@@ -53,10 +67,16 @@ export class GithubSource implements SourceAdapter {
       const repo = await getJson<GhRepo>(`${API}/repos/${direct[1]}`, this.headers()).catch(() => null);
       if (repo) return { total: 1, offset: 0, hits: [toProject(repo)] };
     }
-    const text = q.text.trim() || 'mod';
+    const game = gameDef(q.ctx.gameDefId)?.github;
+    // nothing typed: the curated list for this game, when there is one
+    if (!q.text.trim() && game?.featured?.length && !q.offset) {
+      const repos = await Promise.all(game.featured.map((f) => getJson<GhRepo>(`${API}/repos/${f.repo}`, this.headers(), 3_600_000).catch(() => null)));
+      const hits = repos.filter((r): r is GhRepo => !!r).map(toProject);
+      return { total: hits.length, offset: 0, hits };
+    }
     const page = Math.floor((q.offset ?? 0) / 20) + 1;
     const res = await getJson<{ total_count: number; items: GhRepo[] }>(
-      `${API}/search/repositories?q=${encodeURIComponent(`${text} in:name,description,topics`)}&sort=stars&per_page=20&page=${page}`,
+      `${API}/search/repositories?q=${encodeURIComponent(githubQuery(q.text, game?.keywords))}&sort=stars&per_page=20&page=${page}`,
       this.headers(),
     );
     return { total: Math.min(res.total_count, 1000), offset: (page - 1) * 20, hits: res.items.map(toProject) };
@@ -70,8 +90,10 @@ export class GithubSource implements SourceAdapter {
       const manifestAsset = r.assets.find((a) => a.name.toLowerCase() === 'lattice.json');
       let manifest: LatticeManifest = {};
       if (manifestAsset) manifest = await getJson<LatticeManifest>(manifestAsset.browser_download_url).catch(() => ({}));
-      const candidates = r.assets.filter((a) => ARCHIVE.test(a.name));
-      if (candidates.length === 0) continue;
+      const all = r.assets.filter((a) => ARCHIVE.test(a.name));
+      if (all.length === 0) continue;
+      // builds for other systems only when nothing else is attached
+      const candidates = all.filter((a) => !OTHER_OS.test(a.name)).length ? all.filter((a) => !OTHER_OS.test(a.name)) : all;
       const primary = candidates.find((a) => !NOT_PRIMARY.test(a.name)) ?? candidates[0];
       const files: ModFile[] = [primary].map((a) => ({
         url: a.browser_download_url,
@@ -90,12 +112,9 @@ export class GithubSource implements SourceAdapter {
         published: r.published_at,
         files,
         provides: manifest.provides,
-        deps: (manifest.dependencies ?? []).map((d) => ({
-          ref: { source: d.source, projectId: d.id },
-          kind: d.kind ?? 'requires',
-          range: d.range,
-          name: d.name,
-        })),
+        deps: manifest.dependencies
+          ? manifest.dependencies.map((d) => ({ ref: { source: d.source, projectId: d.id }, kind: d.kind ?? 'requires', range: d.range, name: d.name }))
+          : curatedRequires(ref.projectId).map((repo) => ({ ref: { source: 'github' as const, projectId: repo }, kind: 'requires' as const, name: repo.split('/')[1] })),
       });
     }
     return out;

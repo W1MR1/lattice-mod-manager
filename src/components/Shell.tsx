@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CircleCheck, CircleX, Compass, Download, History, Info, Layers, Library, Network, Plus, Rocket, Settings, Zap } from 'lucide-react';
+import { CircleCheck, CircleX, Compass, Download, History, Info, Layers, Library, Network, Play, Plus, RefreshCw, Settings, Zap } from 'lucide-react';
 import { api } from '../api';
 import { ago, bytes, LOADER_LABEL, plural, speed } from '../format';
 import { useActive, useUI, type Route } from '../store';
@@ -70,6 +70,7 @@ export function Header() {
   const go = useUI((s) => s.go);
   const run = useUI((s) => s.run);
   const [deploying, setDeploying] = useState(false);
+  const [launching, setLaunching] = useState(false);
   const [profileSheet, setProfileSheet] = useState(false);
   if (!game || !profile) {
     return (
@@ -123,18 +124,33 @@ export function Header() {
         </button>
       )}
       <button
-        className="btn primary"
+        className="btn"
         disabled={deploying}
-        title={profile.deployedAt ? `Развёрнуто ${ago(profile.deployedAt)}` : 'Ещё не развёрнуто'}
+        title={`Кладёт моды профиля в папку игры и убирает выключенные. Делается само после каждого изменения — нажмите, если файлы в папке игры поменялись. ${profile.deployedAt ? `Последний раз: ${ago(profile.deployedAt)}.` : 'Ещё не применялось.'}`}
         onClick={async () => {
           setDeploying(true);
           const r = await run(() => api.deploy(profile.id));
           setDeploying(false);
-          if (r) useUI.getState().toast('ok', `Развёрнуто: ${r.deployed} новых файлов, убрано ${r.removed}${r.backedUp ? `, сохранено копий ${r.backedUp}` : ''}`);
+          if (r) useUI.getState().toast('ok', `Моды в папке игры: ${r.root}
+Новых файлов ${r.deployed}, убрано ${r.removed}${r.backedUp ? `, сохранено оригиналов ${r.backedUp}` : ''}`);
         }}
       >
-        {deploying ? <Spinner /> : <Rocket size={15} />}
-        Развернуть
+        {deploying ? <Spinner /> : <RefreshCw size={15} />}
+        Применить к игре
+      </button>
+      <button
+        className="btn primary"
+        disabled={launching}
+        title="Применить моды и запустить игру"
+        onClick={async () => {
+          setLaunching(true);
+          const r = await run(() => api.launchGame(game.id));
+          setLaunching(false);
+          if (r) useUI.getState().toast('info', r.note);
+        }}
+      >
+        {launching ? <Spinner /> : <Play size={15} />}
+        Играть
       </button>
       {profileSheet && <ProfileSheet gameId={game.id} onClose={() => setProfileSheet(false)} />}
     </header>
@@ -198,7 +214,7 @@ export function StatusBar() {
       {profile && (
         <span className="row">
           {profile.deployedAt ? <CircleCheck size={13} color="var(--ok)" /> : <CircleX size={13} color="var(--warn)" />}
-          {profile.deployedAt ? `Развёрнуто ${ago(profile.deployedAt)} · ${state?.settings.deployMethod === 'hardlink' ? 'жёсткие ссылки' : 'копии'}` : 'Не развёрнуто'}
+          {profile.deployedAt ? `Применено к игре ${ago(profile.deployedAt)} · ${state?.settings.deployMethod === 'hardlink' ? 'жёсткие ссылки' : 'копии'}` : 'Ещё не применено к игре'}
         </span>
       )}
       <span className="grow" />

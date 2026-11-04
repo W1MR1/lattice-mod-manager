@@ -1,3 +1,6 @@
+declare const __APP_VERSION__: string;
+export const APP_VERSION = __APP_VERSION__;
+
 // Typed bridge to the main process (see electron/preload.ts).
 import type { Service, Toast } from '../electron/core/service';
 import type { AppState, DownloadView, InstallPlan } from '../shared/types';
@@ -10,10 +13,18 @@ type Methods =
   | 'deleteCollection' | 'exportCollection' | 'importCollectionFile' | 'importModpack' | 'createProfileForCollection'
   | 'removeCollectionFromProfile' | 'deploy' | 'purge' | 'snapshot' | 'rollback' | 'deleteSnapshot' | 'updateSettings'
   | 'inspectPlan' | 'fomodPrompt' | 'reinstallWithChoices' | 'pluginOrder' | 'setNexusKey' | 'clearNexusKey' | 'handleNxm'
-  | 'nexusSsoAvailable' | 'loginWithNexus';
+  | 'nexusSsoAvailable' | 'loginWithNexus'
+  | 'previewRemoval' | 'removeMods' | 'removeAllMods' | 'deleteLeftovers' | 'launchGame' | 'setGamePath' | 'healthCheck' | 'repair';
 
 type Fn<K extends Methods> = Service[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
 export type Api = { [K in Methods]: Fn<K> };
+
+export type UpdateEvent =
+  | { state: 'available'; version: string; notes: string }
+  | { state: 'downloading'; percent: number }
+  | { state: 'ready'; version: string }
+  | { state: 'none' }
+  | { state: 'error'; error: string };
 
 interface Bridge {
   call(method: string, ...args: unknown[]): Promise<unknown>;
@@ -25,11 +36,13 @@ interface Bridge {
   openExternal(url: string): Promise<void>;
   openPath(p: string): Promise<void>;
   setTheme(t: 'dark' | 'light'): Promise<void>;
+  update(action: 'check' | 'download' | 'install' | 'snooze'): Promise<void>;
   on(event: 'state', cb: (s: AppState) => void): () => void;
   on(event: 'downloads', cb: (d: DownloadView[]) => void): () => void;
   on(event: 'toast', cb: (t: Toast) => void): () => void;
   on(event: 'deployed', cb: (d: unknown) => void): () => void;
   on(event: 'plan', cb: (p: InstallPlan) => void): () => void;
+  on(event: 'update', cb: (u: UpdateEvent) => void): () => void;
 }
 
 declare global {

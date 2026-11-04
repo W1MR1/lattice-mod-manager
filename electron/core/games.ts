@@ -17,6 +17,7 @@ export const GAME_DEFS: GameDef[] = [
     loaders: ['fabric', 'quilt', 'neoforge', 'forge'],
     defaultPath: path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), '.minecraft'),
     notes: 'Укажите папку .minecraft или папку экземпляра лаунчера. Моды попадают в mods/, ресурспаки — в resourcepacks/, шейдеры — в shaderpacks/.',
+    github: { keywords: 'minecraft' },
   },
   {
     id: 'lethal-company',
@@ -29,6 +30,7 @@ export const GAME_DEFS: GameDef[] = [
     steamAppId: '1966720',
     deployDir: '',
     nexusDomain: 'lethalcompany',
+    github: { keywords: '"lethal company"' },
   },
   {
     id: 'valheim',
@@ -41,6 +43,7 @@ export const GAME_DEFS: GameDef[] = [
     steamAppId: '892970',
     deployDir: '',
     nexusDomain: 'valheim',
+    github: { keywords: 'valheim' },
   },
   {
     id: 'riskofrain2',
@@ -52,6 +55,7 @@ export const GAME_DEFS: GameDef[] = [
     thunderstoreCommunity: 'riskofrain2',
     steamAppId: '632360',
     deployDir: '',
+    github: { keywords: '"risk of rain 2"' },
   },
   {
     id: 'content-warning',
@@ -63,6 +67,7 @@ export const GAME_DEFS: GameDef[] = [
     thunderstoreCommunity: 'content-warning',
     steamAppId: '2881650',
     deployDir: '',
+    github: { keywords: '"content warning"' },
   },
   {
     id: 'skyrimse',
@@ -77,6 +82,7 @@ export const GAME_DEFS: GameDef[] = [
     notes: 'Архивы распаковываются в Data/, установщики FOMOD проходят мастером. plugins.txt ведётся по порядку модов.',
     nexusDomain: 'skyrimspecialedition',
     pluginsTxt: { folder: 'Skyrim Special Edition', baseMasters: ['Skyrim.esm', 'Update.esm', 'Dawnguard.esm', 'HearthFires.esm', 'Dragonborn.esm', '_ResourcePack.esl'] },
+    github: { keywords: 'skyrim' },
   },
   {
     id: 'fallout4',
@@ -93,6 +99,7 @@ export const GAME_DEFS: GameDef[] = [
       folder: 'Fallout4',
       baseMasters: ['Fallout4.esm', 'DLCRobot.esm', 'DLCworkshop01.esm', 'DLCCoast.esm', 'DLCworkshop02.esm', 'DLCworkshop03.esm', 'DLCNukaWorld.esm', 'DLCUltraHighResolution.esm'],
     },
+    github: { keywords: '"fallout 4"' },
   },
   {
     id: 'cyberpunk2077',
@@ -105,6 +112,18 @@ export const GAME_DEFS: GameDef[] = [
     deployDir: '',
     notes: 'Архивы распаковываются в корень игры (archive/, bin/, r6/, red4ext/).',
     nexusDomain: 'cyberpunk2077',
+    github: {
+      keywords: 'cyberpunk',
+      // the frameworks most Cyberpunk mods are built on, all released on GitHub
+      featured: [
+        { repo: 'wopss/RED4ext' },
+        { repo: 'yamashi/CyberEngineTweaks' },
+        { repo: 'jac3km4/redscript' },
+        { repo: 'psiberx/cp2077-archive-xl', requires: ['wopss/RED4ext'] },
+        { repo: 'psiberx/cp2077-tweak-xl', requires: ['wopss/RED4ext'] },
+        { repo: 'psiberx/cp2077-codeware', requires: ['wopss/RED4ext'] },
+      ],
+    },
   },
   {
     id: 'stardewvalley',
@@ -116,6 +135,7 @@ export const GAME_DEFS: GameDef[] = [
     steamAppId: '413150',
     deployDir: 'Mods',
     nexusDomain: 'stardewvalley',
+    github: { keywords: 'stardew' },
   },
 ];
 

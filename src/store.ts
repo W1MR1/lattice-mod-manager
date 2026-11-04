@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { AppState, CompatReport, DownloadView, GameDef, InstallPlan, ManagedGame, Profile } from '../shared/types';
-import { api, bridge } from './api';
+import type { AppState, CompatReport, DownloadView, GameDef, HealthProblem, InstallPlan, ManagedGame, Profile } from '../shared/types';
+import { api, bridge, type UpdateEvent } from './api';
 
 export type Route = 'mods' | 'discover' | 'graph' | 'collections' | 'downloads' | 'snapshots' | 'settings';
 export const ROUTES: Route[] = ['mods', 'discover', 'graph', 'collections', 'downloads', 'snapshots', 'settings'];
@@ -25,6 +25,10 @@ interface UI {
   planning: string | null;
   addGameOpen: boolean;
   toasts: ToastItem[];
+  /** problems found by the start-up check, shown once */
+  health: HealthProblem[] | null;
+  update: UpdateEvent | null;
+  checkHealth(manual?: boolean): Promise<void>;
   init(): Promise<void>;
   go(r: Route): void;
   select(key: string | null): void;
@@ -59,6 +63,18 @@ export const useUI = create<UI>((set, get) => ({
   planning: null,
   addGameOpen: false,
   toasts: [],
+  health: null,
+  update: null,
+
+  async checkHealth(manual) {
+    try {
+      const problems = await api.healthCheck();
+      if (problems.length) set({ health: problems });
+      else if (manual) get().toast('ok', 'Проверка целостности: всё в порядке');
+    } catch (e) {
+      if (manual) get().toast('err', (e as Error).message);
+    }
+  },
 
   async init() {
     const [state, defs, downloads] = await Promise.all([api.state(), api.gameDefs(), bridge.downloads('list')]);
@@ -74,8 +90,10 @@ export const useUI = create<UI>((set, get) => ({
     bridge.on('toast', (t) => get().toast(t.kind, t.text, t.undo));
     // an nxm:// link from nexusmods.com arrives as a ready plan
     bridge.on('plan', (p) => set({ plan: p, planning: null }));
+    bridge.on('update', (u) => set({ update: u }));
     window.addEventListener('hashchange', () => set({ route: routeFromHash() }));
     void get().refreshCompat();
+    void get().checkHealth();
   },
 
   go(r) {

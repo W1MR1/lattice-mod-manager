@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, Moon, Sun, Trash2 } from 'lucide-react';
+import { FolderOpen, Moon, RefreshCw, ShieldCheck, Sun, Trash2, TriangleAlert } from 'lucide-react';
 import type { SourceId } from '../../shared/types';
-import { api, bridge } from '../api';
+import { api, APP_VERSION, bridge } from '../api';
 import { SOURCE_LABEL } from '../format';
 import { useActive, useUI } from '../store';
 import { Spinner, Stepper, Switch } from '../components/ui';
@@ -14,6 +14,7 @@ function NexusSection() {
   const [busy, setBusy] = useState(false);
   const [nxm, setNxm] = useState('');
   const [sso, setSso] = useState<boolean | null>(null);
+  const [ack, setAck] = useState(false);
   useEffect(() => {
     api
       .nexusSsoAvailable()
@@ -67,7 +68,8 @@ function NexusSection() {
             <input className="input mono" type="password" placeholder="ключ" value={key} onChange={(e) => setKey(e.target.value)} style={{ width: 200 }} aria-label="API-ключ Nexus" />
             <button
               className="btn sm"
-              disabled={!key.trim() || busy}
+              disabled={!key.trim() || busy || !ack}
+              title={ack ? undefined : 'Сначала отметьте, что понимаете риск'}
               onClick={async () => {
                 setBusy(true);
                 const u = await run(() => api.setNexusKey(key));
@@ -83,6 +85,22 @@ function NexusSection() {
           </>
         )}
       </div>
+      {sso === false && (
+        <div className="risk-note" role="note">
+          <TriangleAlert size={18} aria-hidden />
+          <div className="grow">
+            <b>Личный ключ — на ваш страх и риск.</b> Пока Lattice не зарегистрирован в Nexus Mods, их правила не разрешают использовать личные
+            ключи в публичных приложениях. Nexus может отозвать ключ, ограничить или заблокировать аккаунт.{' '}
+            <b>Автор Lattice не несёт ответственности</b> за эти и любые другие последствия. Modrinth, Thunderstore и GitHub работают без ключа.
+            {!user && (
+              <label className="row" style={{ marginTop: 8 }}>
+                <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+                Понимаю риск и использую свой ключ под свою ответственность
+              </label>
+            )}
+          </div>
+        </div>
+      )}
       <div className="field">
         <div className="grow">
           Открывать ссылки nxm:// в Lattice
@@ -291,6 +309,16 @@ export function Settings() {
                   <button className="btn sm" onClick={() => bridge.openPath(game.installPath)}>
                     <FolderOpen size={13} /> Открыть
                   </button>
+                  <button
+                    className="btn sm"
+                    title="Если игра переехала или Lattice нашёл не ту папку"
+                    onClick={async () => {
+                      const dir = await bridge.dialog('folder');
+                      if (dir) await run(() => api.setGamePath(game.id, dir), 'Папка игры изменена, моды применены заново');
+                    }}
+                  >
+                    Сменить папку
+                  </button>
                 </div>
                 <div className="field">
                   <div className="grow">
@@ -339,6 +367,29 @@ export function Settings() {
                 </div>
               </section>
             )}
+            <section className="card card-pad section">
+              <h2>Обслуживание</h2>
+              <div className="field">
+                <div className="grow">
+                  Проверить целостность
+                  <small>Ищет пропавшие файлы модов в папке игры, повреждённые копии, недокачанные загрузки и циклы в порядке загрузки. То же происходит при каждом запуске.</small>
+                </div>
+                <button className="btn sm" onClick={() => void useUI.getState().checkHealth(true)}>
+                  <ShieldCheck size={13} /> Проверить
+                </button>
+              </div>
+              <div className="field">
+                <div className="grow">
+                  Обновления Lattice
+                  <small>
+                    Версия {APP_VERSION}. Новые версии берутся из релизов на GitHub. При запуске Lattice спрашивает, обновляться ли; «Не предлагать 7 дней» откладывает вопрос.
+                  </small>
+                </div>
+                <button className="btn sm" onClick={() => bridge.update('check').catch((e) => useUI.getState().toast('err', (e as Error).message))}>
+                  <RefreshCw size={13} /> Проверить обновления
+                </button>
+              </div>
+            </section>
             <p className="faint mono" style={{ fontSize: 11 }}>
               Данные: {s.dataRoot}
             </p>

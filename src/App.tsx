@@ -13,6 +13,7 @@ import { Settings } from './screens/Settings';
 import { Welcome } from './screens/Welcome';
 import { PlanSheet } from './sheets/PlanSheet';
 import { AddGameSheet } from './sheets/AddGameSheet';
+import { HealthSheet, UpdateSheet } from './sheets/StartupSheets';
 import { Spinner } from './components/ui';
 
 function Toasts() {
@@ -48,6 +49,8 @@ export function App() {
   const ready = useUI((s) => s.ready);
   const route = useUI((s) => s.route);
   const addGameOpen = useUI((s) => s.addGameOpen);
+  const health = useUI((s) => s.health);
+  const update = useUI((s) => s.update);
   const setAddGame = useUI((s) => s.setAddGame);
   const init = useUI((s) => s.init);
   const { game } = useActive();
@@ -97,6 +100,8 @@ export function App() {
       </main>
       <PlanSheet />
       {addGameOpen && <AddGameSheet onClose={() => setAddGame(false)} />}
+      {health && <HealthSheet problems={health} onClose={() => useUI.setState({ health: null })} />}
+      {update && !health && <UpdateSheet ev={update} onClose={() => useUI.setState({ update: null })} />}
       <Toasts />
     </div>
   );

@@ -168,6 +168,14 @@ export async function deploy(o: DeployOptions): Promise<DeployResult> {
   };
 }
 
+/** Files the manifest says are deployed but that are no longer in the game folder. */
+export async function verifyDeployment(manifestPath: string, root: string): Promise<{ missing: string[] }> {
+  const man = await readManifest(manifestPath, root);
+  const missing: string[] = [];
+  for (const owned of Object.values(man.files)) if (!(await exists(path.join(root, owned.rel)))) missing.push(owned.rel);
+  return { missing };
+}
+
 export async function purge(manifestPath: string, root: string, backupDir: string): Promise<number> {
   const man = await readManifest(manifestPath, root);
   let n = 0;

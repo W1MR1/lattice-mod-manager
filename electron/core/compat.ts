@@ -227,6 +227,25 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
     });
   }
 
+  // The same mod taken from two sources (say Modrinth and GitHub): links only
+  // join mods of one source, so Lattice compares names to catch the double.
+  const byName = new Map<string, InstalledMod>();
+  for (const m of enabled) {
+    const name = m.title.toLowerCase().replace(/\b(fabric|forge|neoforge|quilt|mod)\b/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
+    if (name.length < 3) continue;
+    const other = byName.get(name);
+    if (!other) byName.set(name, m);
+    else if (other.ref.source !== m.ref.source)
+      push({
+        severity: 'warning',
+        code: 'duplicate',
+        subject: m.key,
+        related: [other.key],
+        message: `«${m.title}» похоже на «${other.title}» из другого источника. Две копии одного мода обычно конфликтуют.`,
+        fix: { kind: 'disable', label: `Выключить «${m.title}»`, key: m.key },
+      });
+  }
+
   const errors = issues.filter((i) => i.severity === 'error').length;
   const warnings = issues.filter((i) => i.severity === 'warning').length;
   const score = enabled.length === 0 ? 100 : Math.max(0, Math.min(100, 100 - errors * 18 - warnings * 5));

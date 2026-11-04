@@ -1283,6 +1283,25 @@ textarea.input {
   background: var(--accent-soft);
 }
 
+/* ---------- risk note (Nexus personal key) */
+
+.risk-note {
+  display: flex;
+  gap: var(--s-3);
+  margin: var(--s-2) 0;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.risk-note > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--warn);
+}
+
 /* ---------- FOMOD wizard */
 
 .fomod-options {

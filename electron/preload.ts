@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-const EVENTS = new Set(['state', 'downloads', 'toast', 'deployed', 'plan']);
+const EVENTS = new Set(['state', 'downloads', 'toast', 'deployed', 'plan', 'update']);
 
 contextBridge.exposeInMainWorld('lattice', {
   call: (method: string, ...args: unknown[]) => ipcRenderer.invoke('lattice:call', method, args),
@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('lattice', {
   openExternal: (url: string) => ipcRenderer.invoke('lattice:external', url),
   openPath: (p: string) => ipcRenderer.invoke('lattice:openPath', p),
   setTheme: (t: string) => ipcRenderer.invoke('lattice:theme', t),
+  update: (action: string) => ipcRenderer.invoke('lattice:update', action),
   on: (event: string, cb: (payload: unknown) => void) => {
     if (!EVENTS.has(event)) return () => undefined;
     const h = (_: unknown, payload: unknown) => cb(payload);

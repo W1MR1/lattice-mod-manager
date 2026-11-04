@@ -21,7 +21,7 @@ const common = {
   target: 'node22',
   format: 'cjs',
   sourcemap: true,
-  external: ['electron', '7zip-bin', 'node-unrar-js'],
+  external: ['electron', '7zip-bin', 'node-unrar-js', 'electron-updater'],
 };
 await build({ ...common, entryPoints: ['electron/main.ts'], outfile: 'dist-electron/main.cjs' });
 await build({ ...common, entryPoints: ['electron/preload.ts'], outfile: 'dist-electron/preload.cjs' });
