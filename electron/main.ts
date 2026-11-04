@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { listArchive, sevenZip } from './core/archives';
 import type { LaunchTarget } from './core/launch';
+import { systemEnv } from './core/detect';
 import { Service } from './core/service';
 import { LANGS, langFromLcid, langFromLocale, type Lang } from '../shared/i18n';
 import { t } from '../shared/i18n';
@@ -23,6 +24,7 @@ let service: Service;
 
 // Only these service methods are reachable from the renderer.
 const ALLOWED = new Set<keyof Service>([
+  'exportProfile', 'backupAll', 'restoreBackup', 'curseforgeAvailable', 'modrinthAccount', 'modrinthList',
   'state', 'gameDefs', 'detectGames', 'minecraftVersions', 'addGame', 'removeGame', 'setActiveGame',
   'createProfile', 'updateProfile', 'deleteProfile', 'switchProfile', 'compat', 'search', 'project', 'versions',
   'planInstall', 'planUpdates', 'planCollection', 'applyFix', 'applyPlan', 'setEnabled', 'dependentsOf', 'removeMod',
@@ -65,7 +67,7 @@ function registerIpc() {
     return d.list();
   });
 
-  ipcMain.handle('lattice:dialog', async (e, kind: 'folder' | 'files' | 'collection-open' | 'collection-save', defaultName?: string) => {
+  ipcMain.handle('lattice:dialog', async (e, kind: 'folder' | 'files' | 'collection-open' | 'collection-save' | 'backup-open' | 'backup-save', defaultName?: string) => {
     if (!fromOurWindow(e) || !win) throw new Error('forbidden');
     if (kind === 'folder') {
       const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
@@ -82,13 +84,27 @@ function registerIpc() {
       const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: t('Коллекции'), extensions: ['json', 'mrpack'] }] });
       return r.canceled ? null : r.filePaths[0];
     }
-    const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: t('Коллекция Lattice'), extensions: ['json'] }] });
+    if (kind === 'backup-open') {
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: t('Резервная копия Lattice'), extensions: ['json'] }] });
+      return r.canceled ? null : r.filePaths[0];
+    }
+    const backup = kind === 'backup-save';
+    const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: backup ? t('Резервная копия Lattice') : t('Коллекция Lattice'), extensions: ['json'] }] });
     return r.canceled ? null : r.filePath;
   });
 
   ipcMain.handle('lattice:external', (e, url: string) => {
     if (!fromOurWindow(e)) throw new Error('forbidden');
     if (/^https:\/\//i.test(url)) return shell.openExternal(url);
+  });
+
+  // the icon of a game or launcher executable, for the game rail
+  ipcMain.handle('lattice:icon', async (e, p: string) => {
+    if (!fromOurWindow(e) || typeof p !== 'string' || !/\.exe$/i.test(p)) return null;
+    const st = await fs.stat(p).catch(() => null);
+    if (!st?.isFile()) return null;
+    const img = await app.getFileIcon(p, { size: 'large' }).catch(() => null);
+    return img && !img.isEmpty() ? img.toDataURL() : null;
   });
 
   ipcMain.handle('lattice:openPath', async (e, p: string) => {
@@ -160,6 +176,8 @@ async function runSmoke() {
   try {
     const inst = path.join(app.getPath('userData'), 'minecraft-instance');
     await fs.mkdir(inst, { recursive: true });
+    // an official launcher folder, as Lattice finds it when the game is added
+    await fs.writeFile(path.join(inst, 'launcher_profiles.json'), JSON.stringify({ profiles: {}, settings: {} }));
     const game = await service.addGame('minecraft', inst, { gameVersion: '1.21.1', loader: 'fabric' });
     const profileId = game.activeProfileId;
     const plan = await service.planInstall(profileId, [
@@ -210,7 +228,6 @@ async function runSmoke() {
       const back = await fs.stat(path.join(inst, 'mods', victim)).then(() => true, () => false);
       log.push(`repair: fixed=${fixed.fixed.length} failed=${fixed.failed.length} file back=${back} problems now=${(await service.healthCheck()).length}`);
       // "Play": the Fabric loader goes into the official launcher's folder
-      await fs.writeFile(path.join(inst, 'launcher_profiles.json'), JSON.stringify({ profiles: {}, settings: {} }));
       const note = await service.launchGame(game.id);
       const versions = await fs.readdir(path.join(inst, 'versions')).catch(() => []);
       const lp = JSON.parse(await fs.readFile(path.join(inst, 'launcher_profiles.json'), 'utf8')) as { profiles: Record<string, { lastVersionId: string }> };
@@ -347,7 +364,9 @@ function setupUpdates() {
   autoUpdater.on('download-progress', (p) => send('update', { state: 'downloading', percent: Math.round(p.percent) }));
   autoUpdater.on('update-downloaded', (info) => send('update', { state: 'ready', version: info.version }));
   autoUpdater.on('error', (err) => {
+    // a check the user asked for gets a dialog; the one at start only says Lattice works offline
     if (manualUpdateCheck) send('update', { state: 'error', error: err.message });
+    else send('update', { state: 'offline', error: err.message });
   });
   setTimeout(() => void autoUpdater.checkForUpdates().catch(() => undefined), 5000);
 }
@@ -362,13 +381,23 @@ async function launch(target: LaunchTarget) {
     await shell.openExternal(`steam://rungameid/${target.appId}`);
     return;
   }
+  if (target.kind === 'url') {
+    // Epic Games starts its games by link only
+    if (!/^com\.epicgames\.launcher:\/\/apps\/[\w%.-]+\?action=launch&silent=true$/.test(target.url)) throw new Error('bad url');
+    await shell.openExternal(target.url);
+    return;
+  }
   const exe = path.resolve(target.path);
+  const same = (a: string, b: string) => path.resolve(a).toLowerCase() === b.toLowerCase();
   const inGame = service.state().games.some((g) => exe.toLowerCase().startsWith(path.resolve(g.installPath).toLowerCase() + path.sep));
-  const isLauncher = /^(MinecraftLauncher|Minecraft)\.exe$/i.test(path.basename(exe));
+  // a launcher Lattice found itself through the Start menu or its install folder
+  const isLauncher = /^(MinecraftLauncher|Minecraft)\.exe$/i.test(path.basename(exe)) || service.launcherExecutables().some((l) => same(l, exe));
   if (!/\.exe$/i.test(exe) || !(inGame || isLauncher)) throw new Error(t('Этот файл Lattice запускать не будет'));
+  const args = target.args ?? [];
+  if (args.some((a) => !/^[^\0\r\n"]{1,200}$/.test(a))) throw new Error('bad arguments');
   const st = await fs.stat(exe).catch(() => null);
   if (!st?.isFile()) throw new Error(t('Не найден {0}', exe));
-  spawn(exe, [], { cwd: path.dirname(exe), detached: true, stdio: 'ignore', windowsHide: false }).unref();
+  spawn(exe, args, { cwd: path.dirname(exe), detached: true, stdio: 'ignore', windowsHide: false }).unref();
 }
 
 /**
@@ -402,6 +431,13 @@ app.whenReady().then(async () => {
       if (/^https:\/\/www\.nexusmods\.com\//.test(url)) return shell.openExternal(url);
     },
     launch,
+    systemEnv((lnk) => {
+      try {
+        return shell.readShortcutLink(lnk).target || null;
+      } catch {
+        return null;
+      }
+    }),
   );
   service.on('state', (s) => {
     send('state', s);

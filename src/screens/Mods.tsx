@@ -33,6 +33,8 @@ export function ModStatus({ m, report }: { m: InstalledMod; report: CompatReport
     'file-conflict': t('Перезапись файлов'),
     'missing-master': t('Нет мастер-файла'),
     duplicate: t('Дубликат'),
+    'jar-dependency': t('Нет зависимости'),
+    'jar-breaks': t('Конфликт'),
   };
   return (
     <StatusChip tone={sevTone(worst.severity)} title={worst.message}>
@@ -535,6 +537,16 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
             <Puzzle size={14} /> {t('Опции')}
           </button>
         )}
+        <button
+          className="btn"
+          title={t('Открыть «Обзор» с поиском этого мода: тот же мод может быть на Modrinth, GitHub, Thunderstore или GameBanana без ограничений скорости')}
+          onClick={() => {
+            useUI.setState({ discoverText: m.title });
+            useUI.getState().go('discover');
+          }}
+        >
+          <Search size={14} /> {t('Другие источники')}
+        </button>
         <span className="grow" />
         <button className="btn danger" onClick={onRemove}>
           <Trash2 size={14} /> {t('Удалить')}

@@ -12,7 +12,7 @@ import { t } from '../../shared/i18n';
 export interface Leftover {
   path: string;
   size: number;
-  kind: 'staging' | 'download' | 'config';
+  kind: 'staging' | 'download' | 'config' | 'foreign';
   owner: string;
   ownerTitle: string;
   note: string;
@@ -81,7 +81,25 @@ export interface ScanOptions {
   cachePathOf: (f: ModFile) => string;
   /** staged folders and cached files still used by any profile or snapshot-free mod */
   inUse: Set<string>;
+  /** files Lattice placed in the game folder (lower-case relative paths); anything else in the mod folders is listed, unticked */
+  owned?: Set<string>;
 }
+
+/** Folders (relative to the deploy root) that hold mods and nothing of the game itself. */
+const MOD_DIRS: Record<string, string[]> = {
+  minecraft: ['mods'],
+  'lethal-company': ['BepInEx/plugins'],
+  valheim: ['BepInEx/plugins'],
+  riskofrain2: ['BepInEx/plugins'],
+  'content-warning': ['BepInEx/plugins'],
+  cyberpunk2077: ['archive/pc/mod', 'r6/scripts', 'r6/tweaks', 'red4ext/plugins', 'bin/x64/plugins/cyber_engine_tweaks/mods'],
+  stardewvalley: [''],
+};
+
+/** Parts of a mod loader that live among the mods without being mods. */
+const LOADER_PARTS = new Set(['consolecommands', 'savebackup', 'errorhandler']);
+
+const normRel = (rel: string) => (process.platform === 'win32' ? rel.toLowerCase() : rel);
 
 export async function scanLeftovers(o: ScanOptions): Promise<Leftover[]> {
   const out: Leftover[] = [];
@@ -125,6 +143,19 @@ export async function scanLeftovers(o: ScanOptions): Promise<Leftover[]> {
             await add({ path: path.join(cfgDir, e), kind: 'config', owner: m.key, ownerTitle: m.title, note: t('настройки плагина (совпадение по имени)'), checked: true });
           }
         }
+      }
+    }
+  }
+
+  // mods that are in the game's mod folders but did not come from Lattice
+  if (o.owned) {
+    const root = path.join(o.installPath, o.def.deployDir);
+    const owned = [...o.owned];
+    for (const dir of MOD_DIRS[o.def.id] ?? []) {
+      for (const e of await fs.readdir(path.join(root, dir)).catch(() => [] as string[])) {
+        const rel = normRel(dir ? `${dir}/${e}` : e);
+        if (o.owned.has(rel) || owned.some((x) => x.startsWith(`${rel}/`)) || LOADER_PARTS.has(e.toLowerCase())) continue;
+        await add({ path: path.join(root, dir, e), kind: 'foreign', owner: '', ownerTitle: e, note: t('не от Lattice: положен вручную или другой программой'), checked: false });
       }
     }
   }

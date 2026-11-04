@@ -1,10 +1,12 @@
 // Modrinth API v2 (https://docs.modrinth.com). Public, no key, CDN without speed caps.
 import type { DepKind, GameContext, ModProject, ModRef, ModVersion, ProjectKind, SearchQuery, SearchResult } from '../../../shared/types';
 import type { ProjectMeta } from '../resolver';
+import { t } from '../../../shared/i18n';
 import { getJson, postJson } from '../http';
 import type { SourceAdapter } from './types';
 
 const API = 'https://api.modrinth.com/v2';
+const API_V3 = 'https://api.modrinth.com/v3';
 const LOADERS = new Set(['fabric', 'forge', 'neoforge', 'quilt', 'liteloader', 'rift', 'modloader']);
 
 interface MrHit {
@@ -54,7 +56,53 @@ const kindOf = (t: string): ProjectKind =>
 const depKind = (t: string): DepKind =>
   t === 'required' ? 'requires' : t === 'incompatible' ? 'conflicts' : t === 'embedded' ? 'embedded' : 'optional';
 
+export interface ModrinthAccount {
+  username: string;
+  collections: { id: string; name: string; count: number }[];
+  /** followed projects can be listed (needs a token) */
+  follows: boolean;
+}
+
 export class ModrinthSource implements SourceAdapter {
+  /** personal access token of the user's Modrinth account, when given */
+  token: () => string | undefined = () => undefined;
+
+  private auth(): Record<string, string> {
+    const tk = this.token();
+    return tk ? { Authorization: tk } : {};
+  }
+
+  /** Collections of a Modrinth account: public ones by user name, private ones too with a token. */
+  async account(user?: string): Promise<ModrinthAccount> {
+    let id = user?.trim();
+    let username = id ?? '';
+    if (this.token()) {
+      const me = await getJson<{ id: string; username: string }>(`${API}/user`, this.auth(), 0);
+      id = me.id;
+      username = me.username;
+    }
+    if (!id) throw new Error(t('Укажите имя пользователя или токен Modrinth в настройках'));
+    const cols = await getJson<{ id: string; name: string; projects: string[] }[]>(`${API_V3}/user/${encodeURIComponent(id)}/collections`, this.auth(), 60_000);
+    return { username, collections: cols.map((c) => ({ id: c.id, name: c.name, count: c.projects.length })), follows: !!this.token() };
+  }
+
+  /** Projects of one collection, or the projects the account follows. */
+  async listProjects(list: { collection: string } | { follows: true }): Promise<ModProject[]> {
+    let ids: string[];
+    if ('collection' in list) {
+      ids = (await getJson<{ projects: string[] }>(`${API_V3}/collection/${encodeURIComponent(list.collection)}`, this.auth(), 60_000)).projects;
+    } else {
+      const me = await getJson<{ id: string }>(`${API}/user`, this.auth(), 0);
+      ids = (await getJson<MrProject[]>(`${API}/user/${encodeURIComponent(me.id)}/follows`, this.auth(), 0)).map((p) => p.id);
+    }
+    const out: ModProject[] = [];
+    for (let i = 0; i < ids.length; i += 100) {
+      const batch = await getJson<MrProject[]>(`${API}/projects?ids=${encodeURIComponent(JSON.stringify(ids.slice(i, i + 100)))}`);
+      out.push(...batch.map(mrToProject));
+    }
+    return out;
+  }
+
   async search(q: SearchQuery): Promise<SearchResult> {
     const facets: string[][] = [[`project_type:${q.kind && q.kind !== 'library' && q.kind !== 'other' ? q.kind : 'mod'}`]];
     if (q.compatibleOnly !== false) {
@@ -126,21 +174,7 @@ export class ModrinthSource implements SourceAdapter {
   }
 
   async project(ref: ModRef): Promise<ModProject | null> {
-    const p = await getJson<MrProject>(`${API}/project/${encodeURIComponent(ref.projectId)}`);
-    return {
-      ref: { source: 'modrinth', projectId: p.id },
-      title: p.title,
-      summary: p.description,
-      author: '',
-      iconUrl: p.icon_url ?? undefined,
-      downloads: p.downloads,
-      updated: p.updated,
-      categories: p.categories,
-      url: `https://modrinth.com/${p.project_type}/${p.slug}`,
-      kind: kindOf(p.project_type),
-      gameVersions: p.game_versions,
-      loaders: p.loaders,
-    };
+    return mrToProject(await getJson<MrProject>(`${API}/project/${encodeURIComponent(ref.projectId)}`));
   }
 
   async meta(refs: ModRef[]): Promise<Map<string, ProjectMeta>> {
@@ -168,4 +202,21 @@ export class ModrinthSource implements SourceAdapter {
     const list = await getJson<{ version: string; version_type: string }[]>(`${API}/tag/game_version`, {}, 3_600_000);
     return list.filter((v) => v.version_type === 'release').map((v) => v.version);
   }
+}
+
+function mrToProject(p: MrProject): ModProject {
+  return {
+    ref: { source: 'modrinth', projectId: p.id },
+    title: p.title,
+    summary: p.description,
+    author: '',
+    iconUrl: p.icon_url ?? undefined,
+    downloads: p.downloads,
+    updated: p.updated,
+    categories: p.categories,
+    url: `https://modrinth.com/${p.project_type}/${p.slug}`,
+    kind: kindOf(p.project_type),
+    gameVersions: p.game_versions,
+    loaders: p.loaders,
+  };
 }

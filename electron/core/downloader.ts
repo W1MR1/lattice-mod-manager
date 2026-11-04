@@ -27,6 +27,8 @@ export interface DownloadRequest {
   hashes?: ModFile['hashes'];
   /** cap for this file, e.g. 1 where a source limits connections per account */
   maxConnections?: number;
+  /** game the file is for, to list downloads per game */
+  gameId?: string;
 }
 
 interface Segment {
@@ -218,7 +220,7 @@ export class DownloadManager extends EventEmitter {
 
   private async verifyExisting(j: Job): Promise<boolean> {
     const h = j.req.hashes;
-    if (!h || !(h.sha1 || h.sha256 || h.sha512)) return false;
+    if (!h || !(h.sha1 || h.sha256 || h.sha512 || h.md5)) return false;
     try {
       const st = await fs.stat(j.req.dest);
       if (!st.isFile()) return false;
@@ -423,6 +425,7 @@ export class DownloadManager extends EventEmitter {
       startedAt: j.startedAt,
       finishedAt: j.finishedAt,
       verified: j.verified,
+      gameId: j.req.gameId,
     };
   }
 
@@ -447,7 +450,7 @@ export class DownloadManager extends EventEmitter {
 
 /** Checks the strongest hash available. Throws on mismatch. */
 export async function verify(file: string, hashes?: ModFile['hashes']): Promise<DownloadView['verified']> {
-  const algo = hashes?.sha512 ? 'sha512' : hashes?.sha256 ? 'sha256' : hashes?.sha1 ? 'sha1' : null;
+  const algo = hashes?.sha512 ? 'sha512' : hashes?.sha256 ? 'sha256' : hashes?.sha1 ? 'sha1' : hashes?.md5 ? 'md5' : null;
   if (!algo || !hashes) return 'none';
   const expected = hashes[algo]!.toLowerCase();
   const actual = await hashFile(file, algo);
@@ -455,7 +458,7 @@ export async function verify(file: string, hashes?: ModFile['hashes']): Promise<
   return algo;
 }
 
-export function hashFile(file: string, algo: 'sha1' | 'sha256' | 'sha512'): Promise<string> {
+export function hashFile(file: string, algo: 'sha1' | 'sha256' | 'sha512' | 'md5'): Promise<string> {
   return new Promise((resolve, reject) => {
     const h = createHash(algo);
     createReadStream(file)

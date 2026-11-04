@@ -42,10 +42,10 @@ export async function getJson<T>(url: string, headers: Record<string, string> = 
   }
 }
 
-export async function postJson<T>(url: string, body: unknown): Promise<T> {
+export async function postJson<T>(url: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/json', Accept: 'application/json', ...headers },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new HttpError(res.status, `${res.status} ${res.statusText}`);

@@ -27,6 +27,8 @@ interface UI {
   planning: string | null;
   addGameOpen: boolean;
   toasts: ToastItem[];
+  /** search text handed to Discover from elsewhere */
+  discoverText: string | null;
   /** problems found by the start-up check, shown once */
   health: HealthProblem[] | null;
   update: UpdateEvent | null;
@@ -67,6 +69,7 @@ export const useUI = create<UI>((set, get) => ({
   toasts: [],
   health: null,
   update: null,
+  discoverText: null,
 
   async checkHealth(manual) {
     try {

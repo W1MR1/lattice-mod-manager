@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { CircleCheck, CircleX, Compass, Download, History, Info, Layers, Library, Network, Play, Plus, RefreshCw, Settings, Zap } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CircleCheck, CircleX, Compass, Download, History, Info, Layers, Library, Network, Play, Plus, RefreshCw, Settings, WifiOff, Zap } from 'lucide-react';
 import { api } from '../api';
 import { ago, bytes, LOADER_LABEL, plural, speed } from '../format';
 import { useActive, useUI, type Route } from '../store';
 import { HealthRing, Spinner } from './ui';
+import { GameIcon } from './Icons';
 import { ProfileSheet } from '../sheets/ProfileSheet';
 import { t, tk } from '../../shared/i18n';
 
@@ -46,7 +47,7 @@ export function Rail() {
             title={g.name}
             onClick={() => run(() => api.setActiveGame(g.id))}
           >
-            <span>{def?.short ?? g.name.slice(0, 2)}</span>
+            <GameIcon defId={g.defId} exe={g.install?.launcherExe} gamePath={g.installPath} size={26} bare />
           </button>
         );
       })}
@@ -184,7 +185,7 @@ export function Tabs() {
       {TABS.map((tab) => {
         const c = counts[tab.id];
         return (
-          <button key={tab.id} role="tab" className="tab" aria-selected={route === tab.id} onClick={() => go(tab.id)}>
+          <button key={tab.id} role="tab" className="tab" aria-selected={route === tab.id} title={`Ctrl+${TABS.indexOf(tab) + 1}`} onClick={() => go(tab.id)}>
             <tab.icon size={15} />
             {t(tab.label)}
             {c && c.n > 0 && <span className={`tab-count ${c.err ? 'err' : ''}`}>{c.n}</span>}
@@ -195,7 +196,23 @@ export function Tabs() {
   );
 }
 
+function useOnline() {
+  const [online, setOnline] = useState(navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+  return online;
+}
+
 export function StatusBar() {
+  const online = useOnline();
   const downloads = useUI((s) => s.downloads);
   const { profile, state } = useActive();
   const total = downloads.reduce((a, d) => a + d.speed, 0);
@@ -215,6 +232,11 @@ export function StatusBar() {
         <span className="row">
           {profile.deployedAt ? <CircleCheck size={13} color="var(--ok)" /> : <CircleX size={13} color="var(--warn)" />}
           {profile.deployedAt ? t('Применено к игре {0} · {1}', ago(profile.deployedAt), state?.settings.deployMethod === 'hardlink' ? t('жёсткие ссылки') : t('копии')) : t('Ещё не применено к игре')}
+        </span>
+      )}
+      {!online && (
+        <span className="row" style={{ color: 'var(--warn)' }} title={t('Нет подключения к интернету: поиск и загрузки недоступны, всё остальное работает')}>
+          <WifiOff size={13} /> {t('Офлайн')}
         </span>
       )}
       <span className="grow" />

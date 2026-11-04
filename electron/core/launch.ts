@@ -4,11 +4,11 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { GameDef } from '../../shared/types';
+import type { GameDef, InstallInfo } from '../../shared/types';
 import { getJson } from './http';
 import { t } from '../../shared/i18n';
 
-export type LaunchTarget = { kind: 'steam'; appId: string } | { kind: 'exe'; path: string };
+export type LaunchTarget = { kind: 'steam'; appId: string } | { kind: 'exe'; path: string; args?: string[] } | { kind: 'url'; url: string };
 
 export interface LoaderResult {
   versionId: string;
@@ -46,7 +46,13 @@ export function isOfficialMinecraftDir(dir: string): Promise<boolean> {
  * Puts a Fabric or Quilt loader version into the official launcher's folder and
  * adds (or refreshes) a launcher profile for it, as the loaders' own installers do.
  */
-export async function installMinecraftLoader(gameDir: string, gameVersion: string, loader: string, profileId: string, profileName: string): Promise<LoaderResult> {
+/**
+ * `root` is the launcher folder with versions/ (and launcher_profiles.json for
+ * the official launcher). When the mods live elsewhere (`gameDir`, e.g. a
+ * separate game folder of an installation), the launcher profile points there.
+ */
+export async function installMinecraftLoader(root: string, gameVersion: string, loader: string, profileId: string, profileName: string, gameDir?: string): Promise<LoaderResult> {
+  const gameDirOfRoot = root;
   const meta = LOADER_META[loader];
   if (!meta) {
     throw new Error(
@@ -58,7 +64,7 @@ export async function installMinecraftLoader(gameDir: string, gameVersion: strin
   if (!pick) throw new Error(t('Загрузчик {0} не поддерживает Minecraft {1}', loader, gameVersion));
   const profile = await getJson<{ id: string }>(meta.profile(gameVersion, pick.loader.version), {}, 3_600_000);
 
-  const dir = path.join(gameDir, 'versions', profile.id);
+  const dir = path.join(root, 'versions', profile.id);
   const json = path.join(dir, `${profile.id}.json`);
   const installed = !(await exists(json));
   await fs.mkdir(dir, { recursive: true });
@@ -67,7 +73,9 @@ export async function installMinecraftLoader(gameDir: string, gameVersion: strin
   const jar = path.join(dir, `${profile.id}.jar`);
   if (!(await exists(jar))) await fs.writeFile(jar, Buffer.alloc(0));
 
-  const profilesPath = path.join(gameDir, 'launcher_profiles.json');
+  const profilesPath = path.join(gameDirOfRoot, 'launcher_profiles.json');
+  // Legacy Launcher and TLauncher list versions/ by themselves; only the official launcher needs a profile
+  if (!(await exists(profilesPath))) return { versionId: profile.id, profileName: '', installed };
   const raw = await fs.readFile(profilesPath, 'utf8');
   const backup = `${profilesPath}.lattice-bak`;
   if (!(await exists(backup))) await fs.writeFile(backup, raw);
@@ -82,6 +90,7 @@ export async function installMinecraftLoader(gameDir: string, gameVersion: strin
     type: 'custom',
     icon: 'Furnace',
     lastVersionId: profile.id,
+    ...(gameDir && path.resolve(gameDir).toLowerCase() !== path.resolve(root).toLowerCase() ? { gameDir: path.resolve(gameDir) } : {}),
     created: (doc.profiles[key]?.created as string) ?? now,
     // the launcher lists the most recently used profile first
     lastUsed: now,
@@ -104,15 +113,28 @@ export async function findMinecraftLauncher(): Promise<string | null> {
   return null;
 }
 
+/** Loaders that must start the game for its mods to load. */
 const SCRIPT_EXTENDERS: Record<string, string[]> = {
   skyrimse: ['skse64_loader.exe'],
   fallout4: ['f4se_loader.exe'],
+  stardewvalley: ['StardewModdingAPI.exe'],
 };
 
 /** How to start a non-Minecraft game with its deployed mods. */
-export async function gameLaunchTarget(def: GameDef, installPath: string): Promise<LaunchTarget> {
+/** How to start a game copy: its mod loader, its store, or its executable. */
+export async function gameLaunchTarget(def: GameDef, installPath: string, install?: InstallInfo): Promise<LaunchTarget> {
   for (const exe of SCRIPT_EXTENDERS[def.id] ?? []) {
     const p = path.join(installPath, exe);
+    if (await exists(p)) return { kind: 'exe', path: p };
+  }
+  const store = install?.store;
+  if (store === 'xbox') throw new Error(t('Игры из Xbox и Game Pass Lattice запустить не может: запустите её через приложение Xbox — моды уже в её папке'));
+  if (store === 'epic' && install?.epicId) {
+    return { kind: 'url', url: `com.epicgames.launcher://apps/${install.epicId.split(':').map(encodeURIComponent).join('%3A')}?action=launch&silent=true` };
+  }
+  if (def.steamAppId && (store === 'steam' || (!store && /[\\/]steamapps[\\/]/i.test(installPath)))) return { kind: 'steam', appId: def.steamAppId };
+  for (const rel of def.exe ?? []) {
+    const p = path.join(installPath, rel);
     if (await exists(p)) return { kind: 'exe', path: p };
   }
   if (def.steamAppId) return { kind: 'steam', appId: def.steamAppId };

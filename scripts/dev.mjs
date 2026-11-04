@@ -15,6 +15,7 @@ const common = {
   define: {
     'process.env.LATTICE_VERSION': JSON.stringify(pkg.version),
     'process.env.LATTICE_NEXUS_SLUG': JSON.stringify(process.env.LATTICE_NEXUS_SLUG ?? ''),
+    'process.env.LATTICE_CURSEFORGE_KEY': JSON.stringify(process.env.LATTICE_CURSEFORGE_KEY ?? ''),
   },
   bundle: true,
   platform: 'node',

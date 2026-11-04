@@ -20,7 +20,7 @@ function diff(s: Snapshot, current: Record<string, { versionId: string; enabled:
 }
 
 export function Snapshots() {
-  const { state, profile } = useActive();
+  const { state, profile, game } = useActive();
   const run = useUI((s) => s.run);
   const [confirm, setConfirm] = useState<Snapshot | null>(null);
   if (!state || !profile) return null;
@@ -30,7 +30,11 @@ export function Snapshots() {
     <div className="content">
       <div className="screen">
         <div className="toolbar">
-          <span className="muted">{t('Снимок делается сам перед каждым изменением. Откат возвращает моды, версии, правила и коллекции и заново разворачивает игру.')}</span>
+          <span className="muted">
+            <b style={{ color: 'var(--text-1)' }}>{t('Снимки профиля «{0}» · {1}', profile.name, game?.name ?? '')}</b>
+            <br />
+            {t('Снимок делается сам перед каждым изменением. Откат возвращает моды, версии, правила и коллекции и заново разворачивает игру.')}
+          </span>
           <span className="grow" />
           <button className="btn" onClick={() => run(() => api.snapshot(profile.id, t('Снимок вручную')), t('Снимок сохранён'))}>
             <Camera size={15} /> {t('Сделать снимок')}

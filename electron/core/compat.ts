@@ -3,8 +3,9 @@
 import type { Collection, CompatReport, InstalledMod, Issue, Profile } from '../../shared/types';
 import { keyOf } from '../../shared/types';
 import { gameVersionFits, loaderFits } from '../../shared/context';
-import { satisfies } from '../../shared/versions';
+import { matchesStrict, satisfies } from '../../shared/versions';
 import { computeOrder, providerIndex } from './loadorder';
+import { BUILTIN_IDS, type JarMeta } from './jarmeta';
 import { t } from '../../shared/i18n';
 
 export interface FileOverlap {
@@ -25,7 +26,14 @@ export interface PluginCheck {
   available: string[];
 }
 
-export function checkCompatibility(profile: Profile, collections: Collection[], overlaps: FileOverlap[] = [], pluginCheck?: PluginCheck): CompatReport {
+export function checkCompatibility(
+  profile: Profile,
+  collections: Collection[],
+  overlaps: FileOverlap[] = [],
+  pluginCheck?: PluginCheck,
+  /** what each Minecraft mod's jars declare (key -> merged metadata) */
+  jars?: Map<string, JarMeta>,
+): CompatReport {
   const all = Object.values(profile.mods);
   const enabled = all.filter((m) => m.enabled);
   const enabledProviders = providerIndex(enabled);
@@ -245,6 +253,42 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
         message: t('«{0}» похоже на «{1}» из другого источника. Две копии одного мода обычно конфликтуют.', m.title, other.title),
         fix: { kind: 'disable', label: t('Выключить «{0}»', m.title), key: m.key },
       });
+  }
+
+  // Dependencies written in the jars themselves: the loader stops the game when one is missing.
+  if (jars?.size) {
+    const live = [...jars].filter(([k]) => profile.mods[k]?.enabled);
+    const provided = new Set<string>(BUILTIN_IDS);
+    for (const [, m] of live) for (const id of m.ids) provided.add(id.toLowerCase());
+    for (const [k, m] of live) {
+      const own = new Set(m.ids.map((x) => x.toLowerCase()));
+      for (const d of m.depends) {
+        const id = d.id.toLowerCase();
+        if (provided.has(id) || own.has(id)) continue;
+        push({
+          severity: 'error',
+          code: 'jar-dependency',
+          subject: k,
+          related: [],
+          message: t('«{0}» требует мод «{1}», а его нет в профиле. Это указано в самом файле мода: без него игра не запустится.', title(k), d.id),
+          fix: profile.mods[k].ref.source === 'modrinth' ? { kind: 'install', label: t('Найти «{0}» на Modrinth и установить', d.id), ref: { source: 'modrinth', projectId: id.replace(/_/g, '-') } } : undefined,
+        });
+      }
+      for (const b of m.breaks) {
+        const id = b.id.toLowerCase();
+        const other = live.find(([k2, m2]) => k2 !== k && m2.ids.some((x) => x.toLowerCase() === id));
+        // a breaks entry usually names old versions only: it counts when the installed one is in the range
+        if (!other || !matchesStrict(other[1].versions[id], b.range)) continue;
+        push({
+          severity: 'error',
+          code: 'jar-breaks',
+          subject: k,
+          related: [other[0]],
+          message: t('«{0}» не работает вместе с «{1}»: это указано в самом файле мода.', title(k), title(other[0])),
+          fix: { kind: 'disable', label: t('Выключить «{0}»', title(other[0])), key: other[0] },
+        });
+      }
+    }
   }
 
   const errors = issues.filter((i) => i.severity === 'error').length;

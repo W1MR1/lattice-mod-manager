@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CircleCheck, Download, TriangleAlert } from 'lucide-react';
+import { CircleCheck, Download, RefreshCw, TriangleAlert, WifiOff, X } from 'lucide-react';
 import type { HealthProblem } from '../../shared/types';
 import { api, bridge, type UpdateEvent } from '../api';
 import { useUI } from '../store';
@@ -62,6 +62,31 @@ export function HealthSheet({ problems, onClose }: { problems: HealthProblem[]; 
         ))}
       </div>
     </Modal>
+  );
+}
+
+/** The update check at start could not reach GitHub: say so once and keep working. */
+export function OfflineBanner({ onClose }: { onClose: () => void }) {
+  const toast = useUI((s) => s.toast);
+  return (
+    <div className="banner" role="status">
+      <WifiOff size={16} aria-hidden />
+      <span className="grow">
+        <b>{t('Нет связи с репозиторием обновлений на GitHub.')}</b> {t('Lattice работает офлайн: моды, профили, коллекции и снимки доступны, поиск и загрузки заработают, когда появится сеть.')}
+      </span>
+      <button
+        className="btn sm"
+        onClick={() => {
+          onClose();
+          void bridge.update('check').catch((e) => toast('err', String((e as Error).message ?? e)));
+        }}
+      >
+        <RefreshCw size={13} /> {t('Повторить')}
+      </button>
+      <button className="btn ghost sm icon" aria-label={t('Закрыть')} onClick={onClose}>
+        <X size={14} />
+      </button>
+    </div>
   );
 }
 

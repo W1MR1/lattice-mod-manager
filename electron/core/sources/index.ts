@@ -6,6 +6,8 @@ import { GithubSource } from './github';
 import { ModrinthSource } from './modrinth';
 import { NexusSource } from './nexus';
 import { ThunderstoreSource } from './thunderstore';
+import { GameBananaSource } from './gamebanana';
+import { CurseForgeSource } from './curseforge';
 import type { SourceAdapter } from './types';
 import { t } from '../../../shared/i18n';
 
@@ -20,6 +22,8 @@ export class Sources {
   readonly thunderstore: ThunderstoreSource;
   readonly github: GithubSource;
   readonly nexus: NexusSource;
+  readonly gamebanana = new GameBananaSource();
+  readonly curseforge: CurseForgeSource;
 
   constructor(
     cacheDir: () => string,
@@ -27,10 +31,14 @@ export class Sources {
     githubToken: () => string | undefined,
     private local: () => Record<string, LocalEntry>,
     nexusKey: () => string | undefined = () => undefined,
+    curseforgeKey: () => string | undefined = () => undefined,
+    modrinthToken: () => string | undefined = () => undefined,
   ) {
     this.thunderstore = new ThunderstoreSource(cacheDir, gameDef);
     this.github = new GithubSource(githubToken);
     this.nexus = new NexusSource(nexusKey, (id) => gameDef(id)?.nexusDomain);
+    this.curseforge = new CurseForgeSource(curseforgeKey);
+    this.modrinth.token = modrinthToken;
   }
 
   private adapter(source: SourceId): SourceAdapter | null {
@@ -38,6 +46,8 @@ export class Sources {
     if (source === 'thunderstore') return this.thunderstore;
     if (source === 'github') return this.github;
     if (source === 'nexus') return this.nexus;
+    if (source === 'gamebanana') return this.gamebanana;
+    if (source === 'curseforge') return this.curseforge;
     return null;
   }
 

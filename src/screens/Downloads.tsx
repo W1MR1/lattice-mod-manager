@@ -1,7 +1,8 @@
+import { useState } from 'react';
 import { Download, Pause, Play, X } from 'lucide-react';
 import { api, bridge } from '../api';
 import { bytes, eta, speed } from '../format';
-import { useUI } from '../store';
+import { useActive, useUI } from '../store';
 import { Empty, SegmentBar, StatusChip, Stepper, type Tone } from '../components/ui';
 import type { DownloadState } from '../../shared/types';
 import { t, tk } from '../../shared/i18n';
@@ -18,7 +19,11 @@ const STATE: Record<DownloadState, [Tone, string]> = {
 };
 
 export function Downloads() {
-  const downloads = useUI((s) => s.downloads);
+  const all = useUI((s) => s.downloads);
+  const { game } = useActive();
+  const [scope, setScope] = useState<'game' | 'all'>('game');
+  // each game sees its own downloads; files fetched for no game in particular show under "all games"
+  const downloads = scope === 'game' && game ? all.filter((d) => d.gameId === game.id) : all;
   const settings = useUI((s) => s.state?.settings);
   const run = useUI((s) => s.run);
   const total = downloads.reduce((a, d) => a + d.speed, 0);
@@ -33,7 +38,17 @@ export function Downloads() {
         <div className="toolbar">
           <span className="muted">{t('Своих ограничений скорости нет. Файл делится на диапазоны и качается параллельными потоками; освободившийся поток забирает половину самого большого остатка.')}</span>
           <span className="grow" />
-          <button className="btn ghost" disabled={!downloads.some((d) => ['done', 'error', 'cancelled'].includes(d.state))} onClick={() => act('clear')}>
+          {game && (
+            <div className="seg" role="group" aria-label={t('Какие загрузки показывать')}>
+              <button aria-pressed={scope === 'game'} onClick={() => setScope('game')}>
+                {game.name}
+              </button>
+              <button aria-pressed={scope === 'all'} onClick={() => setScope('all')}>
+                {t('Все игры')}
+              </button>
+            </div>
+          )}
+          <button className="btn ghost" disabled={!all.some((d) => ['done', 'error', 'cancelled'].includes(d.state))} onClick={() => act('clear')}>
             {t('Очистить завершённые')}
           </button>
         </div>

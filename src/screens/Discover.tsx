@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download, ExternalLink, Library, Search, Star, X } from 'lucide-react';
 import type { ModProject, ModVersion, ProjectKind, SourceId } from '../../shared/types';
+import type { ModrinthAccount } from '../../electron/core/sources/modrinth';
 import { keyOf } from '../../shared/types';
 import { fitsContext } from '../../shared/context';
 import { api, bridge } from '../api';
@@ -23,7 +24,11 @@ export function Discover() {
   const go = useUI((s) => s.go);
   const sources = (def?.sources ?? []).filter((s): s is Exclude<SourceId, 'local'> => s !== 'local');
   const [source, setSource] = useState<Exclude<SourceId, 'local'>>(sources[0] ?? 'modrinth');
-  const [text, setText] = useState('');
+  const [text, setText] = useState(() => {
+    const handed = useUI.getState().discoverText;
+    if (handed) useUI.setState({ discoverText: null });
+    return handed ?? '';
+  });
   const [kind, setKind] = useState<ProjectKind>('mod');
   const [compatible, setCompatible] = useState(true);
   const [hits, setHits] = useState<ModProject[]>([]);
@@ -31,7 +36,31 @@ export function Discover() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ModProject | null>(null);
+  const settings = useUI((s) => s.state?.settings);
+  const [cfReady, setCfReady] = useState<boolean | null>(null);
+  // a Modrinth account list instead of the catalogue: '' | 'follows' | collection id
+  const [list, setList] = useState('');
+  const [account, setAccount] = useState<ModrinthAccount | null>(null);
   const seq = useRef(0);
+  const hasAccount = !!(settings?.modrinthUser || settings?.modrinthToken);
+  const kinds = source === 'curseforge' ? KINDS.filter(([k]) => k !== 'modpack') : KINDS;
+
+  useEffect(() => {
+    void api
+      .curseforgeAvailable()
+      .then(setCfReady)
+      .catch(() => setCfReady(false));
+  }, [settings?.curseforgeKey]);
+
+  useEffect(() => {
+    setAccount(null);
+    setList('');
+    if (source !== 'modrinth' || !hasAccount) return;
+    void api
+      .modrinthAccount()
+      .then(setAccount)
+      .catch(() => setAccount(null));
+  }, [source, settings?.modrinthUser, settings?.modrinthToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!sources.includes(source) && sources[0]) setSource(sources[0]);
@@ -43,7 +72,23 @@ export function Discover() {
     setLoading(true);
     setError(null);
     try {
-      const r = await api.search({ source, text, ctx: profile.context, kind: source === 'modrinth' ? kind : undefined, offset, limit: 30, compatibleOnly: compatible });
+      if (source === 'curseforge' && cfReady === false) {
+        setHits([]);
+        setTotal(0);
+        return;
+      }
+      if (source === 'modrinth' && list) {
+        // one of the account's lists, filtered here by the search text
+        const all = await api.modrinthList(list === 'follows' ? { follows: true } : { collection: list });
+        if (my !== seq.current) return;
+        const q = text.trim().toLowerCase();
+        const found = q ? all.filter((p) => p.title.toLowerCase().includes(q)) : all;
+        setHits(found);
+        setTotal(found.length);
+        return;
+      }
+      const typed = source === 'modrinth' || source === 'curseforge';
+      const r = await api.search({ source, text, ctx: profile.context, kind: typed ? kind : undefined, offset, limit: 30, compatibleOnly: compatible });
       if (my !== seq.current) return;
       setHits((h) => (offset ? [...h, ...r.hits] : r.hits));
       setTotal(r.total);
@@ -57,10 +102,16 @@ export function Discover() {
   useEffect(() => {
     const t = setTimeout(() => void load(0), text ? 350 : 0);
     return () => clearTimeout(t);
-  }, [source, text, kind, compatible, profile?.id, profile?.context.gameVersion, profile?.context.loader]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [source, text, kind, compatible, list, cfReady, profile?.id, profile?.context.gameVersion, profile?.context.loader]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!profile || !def) return null;
   const installed = (p: ModProject) => !!profile.mods[keyOf(p.ref)];
+  const installAll = () => {
+    const todo = hits.filter((p) => !installed(p) && p.kind !== 'modpack');
+    if (!todo.length) return;
+    const name = list === 'follows' ? t('Подписки') : (account?.collections.find((c) => c.id === list)?.name ?? '');
+    void openPlan(t('Установка из «{0}»', name), () => api.planInstall(profile.id, todo.map((p) => ({ ref: p.ref, title: p.title }))));
+  };
 
   const install = (p: ModProject, versionId?: string) => openPlan(t('Установка «{0}»', p.title), () => api.planInstall(profile.id, [{ ref: p.ref, versionId, title: p.title }]));
   const importPack = async (p: ModProject) => {
@@ -91,9 +142,20 @@ export function Discover() {
               aria-label={t("Поиск модов")}
             />
           </div>
-          {source === 'modrinth' && (
+          {source === 'modrinth' && account && (
+            <select className="select" value={list} onChange={(e) => setList(e.target.value)} aria-label={t('Что показывать')} title={t('Аккаунт Modrinth: {0}', account.username)}>
+              <option value="">{t('Весь каталог')}</option>
+              {account.follows && <option value="follows">{t('Мои подписки')}</option>}
+              {account.collections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {t('Коллекция «{0}» ({1})', c.name, c.count)}
+                </option>
+              ))}
+            </select>
+          )}
+          {(source === 'modrinth' || source === 'curseforge') && !list && (
             <div className="seg" role="group" aria-label={t("Тип")}>
-              {KINDS.map(([k, l]) => (
+              {kinds.map(([k, l]) => (
                 <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>
                   {t(l)}
                 </button>
@@ -101,7 +163,12 @@ export function Discover() {
             </div>
           )}
           <span className="grow" />
-          {source === 'modrinth' && (
+          {list && hits.some((p) => !installed(p)) && (
+            <button className="btn primary" onClick={installAll}>
+              <Download size={15} /> {t('Установить все ({0})', hits.filter((p) => !installed(p) && p.kind !== 'modpack').length)}
+            </button>
+          )}
+          {(source === 'modrinth' || source === 'curseforge') && !list && (
             <label className="row muted" title={t("Показывать только то, что подходит к версии игры и загрузчику профиля")}>
               <Switch on={compatible} onChange={setCompatible} label={t("Только совместимые")} />
               {t('Только совместимые')}
@@ -110,7 +177,17 @@ export function Discover() {
         </div>
 
         <div className="screen-scroll">
-          {error ? (
+          {source === 'curseforge' && cfReady === false ? (
+            <Empty
+              title={t('CurseForge пока не подключён')}
+              text={t('CurseForge выдаёт доступ к своему API только по ключу. Если у вас есть ключ (console.curseforge.com), укажите его в настройках — поиск и установка заработают здесь же.')}
+              action={
+                <button className="btn" onClick={() => go('settings')}>
+                  {t('Открыть настройки')}
+                </button>
+              }
+            />
+          ) : error ? (
             <Empty title={t("Источник не ответил")} text={error} action={<button className="btn" onClick={() => load(0)}>{t('Повторить')}</button>} />
           ) : hits.length === 0 && loading ? (
             <Empty
@@ -162,10 +239,12 @@ export function Discover() {
                       <p>{p.summary}</p>
                       <div className="result-meta">
                         <span>{p.author}</span>
-                        <span className="row" style={{ gap: 3 }}>
-                          {source === 'github' ? <Star size={12} /> : <Download size={12} />}
-                          {count(p.downloads)}
-                        </span>
+                        {p.downloads > 0 && (
+                          <span className="row" style={{ gap: 3 }}>
+                            {source === 'github' ? <Star size={12} /> : <Download size={12} />}
+                            {count(p.downloads)}
+                          </span>
+                        )}
                         <span>{ago(p.updated)}</span>
                         {p.categories.slice(0, 2).map((c) => (
                           <span key={c} className="chip outline" style={{ height: 18, fontSize: 11 }}>
@@ -177,7 +256,7 @@ export function Discover() {
                   </div>
                 ))}
               </div>
-              {hits.length < total && (
+              {!list && hits.length < total && (
                 <div className="row" style={{ justifyContent: 'center', marginTop: 16 }}>
                   <button className="btn" disabled={loading} onClick={() => load(hits.length)}>
                     {loading && <Spinner />} {t('Показать ещё')}

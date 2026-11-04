@@ -44,6 +44,8 @@ export const SOURCE_LABEL: Record<string, string> = {
   thunderstore: 'Thunderstore',
   github: 'GitHub',
   nexus: 'Nexus Mods',
+  gamebanana: 'GameBanana',
+  curseforge: 'CurseForge',
   get local() {
     return t('Локальный');
   },

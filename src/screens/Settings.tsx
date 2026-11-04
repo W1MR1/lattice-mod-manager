@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, Moon, RefreshCw, ShieldCheck, Sun, Trash2, TriangleAlert } from 'lucide-react';
+import { Download, FolderOpen, Moon, RefreshCw, ShieldCheck, Sun, Trash2, TriangleAlert, Upload } from 'lucide-react';
 import type { SourceId } from '../../shared/types';
 import { api, APP_VERSION, bridge } from '../api';
 import { SOURCE_LABEL } from '../format';
 import { useActive, useUI } from '../store';
-import { Spinner, Stepper, Switch } from '../components/ui';
+import { Modal, Spinner, Stepper, Switch } from '../components/ui';
 import { McContextFields } from '../sheets/ProfileSheet';
+import { ChangeFolderSheet, viaLabel } from '../sheets/AddGameSheet';
 import { getLang, LANGS, t, type Lang } from '../../shared/i18n';
 
 function NexusSection() {
@@ -130,6 +131,30 @@ function NexusSection() {
   );
 }
 
+/** A key or token: shown only as "saved", replaced or cleared. */
+function SecretField({ label, hint, saved, placeholder, onSave }: { label: string; hint: string; saved: boolean; placeholder?: string; onSave: (v: string | undefined) => void }) {
+  const [v, setV] = useState('');
+  return (
+    <div className="field">
+      <div className="grow">
+        {label}
+        <small>{hint}</small>
+      </div>
+      <input className="input mono" type="password" placeholder={saved ? t('•••••• сохранён') : (placeholder ?? '')} value={v} onChange={(e) => setV(e.target.value)} style={{ width: 200 }} aria-label={label} />
+      <button
+        className="btn sm"
+        disabled={!v && !saved}
+        onClick={() => {
+          onSave(v.trim() || undefined);
+          setV('');
+        }}
+      >
+        {v ? t('Сохранить') : t('Очистить')}
+      </button>
+    </div>
+  );
+}
+
 function PluginOrder({ profileId, folder }: { profileId: string; folder: string }) {
   const state = useUI((x) => x.state);
   const [list, setList] = useState<Awaited<ReturnType<typeof api.pluginOrder>> | null>(null);
@@ -175,6 +200,10 @@ export function Settings() {
   const [hosts, setHosts] = useState('');
   const [token, setToken] = useState('');
   const [pname, setPname] = useState(profile?.name ?? '');
+  const [moving, setMoving] = useState(false);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [mrUser, setMrUser] = useState(s?.modrinthUser ?? '');
+  useEffect(() => setMrUser(s?.modrinthUser ?? ''), [s?.modrinthUser]);
   useEffect(() => setHosts(s?.trustedHosts.join('\n') ?? ''), [s?.trustedHosts]);
   useEffect(() => setPname(profile?.name ?? ''), [profile?.id, profile?.name]);
   if (!s) return null;
@@ -269,7 +298,7 @@ export function Settings() {
 
             <section className="card card-pad section">
               <h2>{t('Источники')}</h2>
-              {(['modrinth', 'thunderstore', 'nexus', 'github'] as SourceId[]).map((src) => (
+              {(['modrinth', 'curseforge', 'thunderstore', 'nexus', 'gamebanana', 'github'] as SourceId[]).map((src) => (
                 <div className="field" key={src}>
                   <div className="grow">{SOURCE_LABEL[src]}</div>
                   <Switch on={s.enabledSources[src]} onChange={(v) => set({ enabledSources: { ...s.enabledSources, [src]: v } })} label={SOURCE_LABEL[src]} />
@@ -291,6 +320,23 @@ export function Settings() {
                   {token ? t('Сохранить') : t('Очистить')}
                 </button>
               </div>
+              <SecretField
+                label={t('Ключ CurseForge')}
+                hint={t('CurseForge открывает поиск и скачивание только по ключу API, который выдаёт сам (console.curseforge.com). Аккаунтов для сторонних программ у CurseForge нет. Хранится только на этом компьютере.')}
+                saved={!!s.curseforgeKey}
+                onSave={(v) => set({ curseforgeKey: v })}
+              />
+              <div className="field">
+                <div className="grow">
+                  {t('Аккаунт Modrinth')}
+                  <small>{t('Имя пользователя показывает ваши публичные коллекции в «Обзоре». Токен (modrinth.com → Settings → Personal access tokens, только чтение) добавляет приватные коллекции и подписки.')}</small>
+                </div>
+                <input className="input" placeholder={t('имя пользователя')} value={mrUser} onChange={(e) => setMrUser(e.target.value)} style={{ width: 150 }} aria-label={t('Имя пользователя Modrinth')} />
+                <button className="btn sm" disabled={mrUser === (s.modrinthUser ?? '')} onClick={() => set({ modrinthUser: mrUser.trim() || undefined })}>
+                  {t('Сохранить')}
+                </button>
+              </div>
+              <SecretField label={t('Токен Modrinth')} hint={t('Необязателен. Хранится только на этом компьютере.')} saved={!!s.modrinthToken} placeholder="mrp_…" onSave={(v) => set({ modrinthToken: v })} />
               <div className="field" style={{ alignItems: 'flex-start' }}>
                 <div className="grow">
                   {t('Доверенные хосты')}
@@ -315,6 +361,11 @@ export function Settings() {
                 <div className="field">
                   <div className="grow">
                     {t('Папка игры')}
+                    {game.install && (game.install.launcher || game.install.store) && (
+                      <span className="chip outline" style={{ marginLeft: 8 }}>
+                        {viaLabel(game.install.launcher ?? game.install.store)}
+                      </span>
+                    )}
                     <small className="mono">{game.installPath}</small>
                   </div>
                   <button className="btn sm" onClick={() => bridge.openPath(game.installPath)}>
@@ -323,13 +374,11 @@ export function Settings() {
                   <button
                     className="btn sm"
                     title={t("Если игра переехала или Lattice нашёл не ту папку")}
-                    onClick={async () => {
-                      const dir = await bridge.dialog('folder');
-                      if (dir) await run(() => api.setGamePath(game.id, dir), t('Папка игры изменена, моды применены заново'));
-                    }}
+                    onClick={() => setMoving(true)}
                   >
                     {t('Сменить папку')}
                   </button>
+                  {moving && <ChangeFolderSheet game={game} onClose={() => setMoving(false)} />}
                 </div>
                 <div className="field">
                   <div className="grow">
@@ -359,6 +408,21 @@ export function Settings() {
                   </div>
                   <button className="btn sm" onClick={() => run(() => api.purge(game.id), t('Папка игры очищена'))}>
                     {t('Очистить')}
+                  </button>
+                </div>
+                <div className="field">
+                  <div className="grow">
+                    {t('Экспорт профиля')}
+                    <small>{t('Файл с точными версиями модов, правилами и опциями установщиков. Его можно открыть на другом компьютере: Коллекции → Импорт.')}</small>
+                  </div>
+                  <button
+                    className="btn sm"
+                    onClick={async () => {
+                      const file = await bridge.dialog('collection-save', `${profile.name.replace(/[\\/:*?"<>|]+/g, '_')}.lattice.json`);
+                      if (file) await run(() => api.exportProfile(profile.id, file));
+                    }}
+                  >
+                    <Download size={13} /> {t('Экспорт…')}
                   </button>
                 </div>
                 <div className="field">
@@ -400,7 +464,65 @@ export function Settings() {
                   <RefreshCw size={13} /> {t('Проверить обновления')}
                 </button>
               </div>
+              <div className="field">
+                <div className="grow">
+                  {t('Резервная копия')}
+                  <small>{t('Игры, профили, коллекции, снимки и настройки в одном файле. Ключи и сами файлы модов в копию не входят: при восстановлении Lattice скачает недостающее.')}</small>
+                </div>
+                <button
+                  className="btn sm"
+                  onClick={async () => {
+                    const file = await bridge.dialog('backup-save', `lattice-backup-${new Date().toISOString().slice(0, 10)}.json`);
+                    if (!file) return;
+                    const r = await run(() => api.backupAll(file));
+                    if (r) useUI.getState().toast('ok', t('Копия сохранена: игр {0}, профилей {1}, коллекций {2}', r.games, r.profiles, r.collections));
+                  }}
+                >
+                  <Download size={13} /> {t('Сохранить…')}
+                </button>
+                <button
+                  className="btn sm"
+                  onClick={async () => {
+                    const file = await bridge.dialog('backup-open');
+                    if (file) setRestoring(file);
+                  }}
+                >
+                  <Upload size={13} /> {t('Восстановить…')}
+                </button>
+              </div>
             </section>
+            {restoring && (
+              <Modal
+                title={t('Восстановить из копии?')}
+                sub={t('Игры, профили, коллекции и снимки заменятся содержимым файла. Текущее состояние Lattice сохранится рядом как state.json.before-restore.')}
+                onClose={() => setRestoring(null)}
+                size="sm"
+                foot={
+                  <>
+                    <span className="grow" />
+                    <button className="btn ghost" onClick={() => setRestoring(null)}>
+                      {t('Отмена')}
+                    </button>
+                    <button
+                      className="btn primary"
+                      onClick={async () => {
+                        const file = restoring;
+                        setRestoring(null);
+                        const r = await run(() => api.restoreBackup(file));
+                        if (r) {
+                          useUI.getState().toast('ok', t('Восстановлено: игр {0}, профилей {1}', r.games, r.profiles));
+                          void useUI.getState().checkHealth(true);
+                        }
+                      }}
+                    >
+                      {t('Восстановить')}
+                    </button>
+                  </>
+                }
+              >
+                <span className="mono faint">{restoring}</span>
+              </Modal>
+            )}
             <p className="faint mono" style={{ fontSize: 11 }}>
               {t('Данные:')} {s.dataRoot}
             </p>

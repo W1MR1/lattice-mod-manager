@@ -30,14 +30,16 @@ import type {
   Settings,
   Snapshot,
 } from '../../shared/types';
-import type { FomodPrompt, GameDef, HealthProblem } from '../../shared/types';
+import type { FomodPrompt, GameDef, HealthProblem, InstallInfo } from '../../shared/types';
 import { keyOf } from '../../shared/types';
 import { defaultChoices, validateChoices, type FileState, type FomodChoices } from '../../shared/fomod';
 import { checkCompatibility, type PluginCheck, type PluginInfo } from './compat';
 import { collectionClosure, fromProfile, importMrpack, parseCollection, slugId, type CollectionMeta } from './collections';
-import { computeOverlaps, deploy, forgetStaged, purge, verifyDeployment } from './deployer';
+import { computeOverlaps, deploy, deployDrift, forgetStaged, ownedFiles, purge, stagedFiles, type DeployFailure, type DeployOptions } from './deployer';
+import { readJarMeta, type JarMeta } from './jarmeta';
 import { DownloadManager } from './downloader';
-import { detectGames, GAME_DEFS, gameDef } from './games';
+import { GAME_DEFS, gameDef } from './games';
+import { detectAll, inspectFolder, launcherName, samePath, systemEnv, type DetectEnv } from './detect';
 import { FomodRequired, inspectFomod, STAGED_PREFIX, safeName, stageVersion, walk } from './installer';
 import { computeOrder, providerIndex } from './loadorder';
 import { PLUGIN_EXT, pluginMasters, pluginsTxtPath, restorePluginsTxt, writePluginsTxt } from './plugins';
@@ -48,11 +50,12 @@ import { Store } from './store';
 import { collectOrphans, recomputeLinks } from './links';
 import { applyRemoval, planRemoval, type RemovalOptions } from './removal';
 import { scanLeftovers, type Leftover } from './cleanup';
-import { findMinecraftLauncher, gameLaunchTarget, installMinecraftLoader, isOfficialMinecraftDir, type LaunchTarget } from './launch';
+import { findMinecraftLauncher, gameLaunchTarget, installMinecraftLoader, type LaunchTarget } from './launch';
 export { collectOrphans, recomputeLinks } from './links';
-import { NEXUS_SLUG } from './app-info';
+import { APP_VERSION, CURSEFORGE_KEY, NEXUS_SLUG } from './app-info';
+import { defaultSettings, type Persisted } from './store';
 import { nexusSso } from './nexus-sso';
-import { LANGS, setLang, t } from '../../shared/i18n';
+import { LANGS, plural, setLang, t } from '../../shared/i18n';
 
 export type Toast = { kind: 'ok' | 'err' | 'info'; text: string; undo?: { label: string; snapshotId: string } };
 
@@ -87,6 +90,8 @@ export class Service extends EventEmitter {
     private launcher: (t: LaunchTarget) => Promise<void> = async () => {
       throw new Error(t('Запуск игр недоступен'));
     },
+    /** where to look for games and launchers (a fake one in tests) */
+    private env: DetectEnv = systemEnv(),
   ) {
     super();
     this.store = new Store(stateFile, dataRoot);
@@ -97,6 +102,8 @@ export class Service extends EventEmitter {
       () => this.settings.githubToken,
       () => this.store.state.local,
       () => this.nexusKey(),
+      () => this.settings.curseforgeKey || CURSEFORGE_KEY || undefined,
+      () => this.settings.modrinthToken || undefined,
     );
     this.downloads = new DownloadManager(() => ({
       maxParallel: this.settings.maxParallelDownloads,
@@ -119,7 +126,11 @@ export class Service extends EventEmitter {
   state(): AppState {
     const { local: _local, ...pub } = this.store.state;
     const { nexusKeyEnc: _key, ...settings } = pub.settings;
-    return { ...pub, settings: { ...settings, githubToken: settings.githubToken ? '••••' : undefined } };
+    const mask = (v?: string) => (v ? '••••' : undefined);
+    return {
+      ...pub,
+      settings: { ...settings, githubToken: mask(settings.githubToken), curseforgeKey: mask(settings.curseforgeKey), modrinthToken: mask(settings.modrinthToken) },
+    };
   }
 
   private nexusKey(): string | undefined {
@@ -165,8 +176,30 @@ export class Service extends EventEmitter {
     return GAME_DEFS;
   }
 
-  detectGames() {
-    return detectGames();
+  async detectGames() {
+    return detectAll(this.env, (await findMinecraftLauncher()) ?? undefined);
+  }
+
+  /** Store or launcher of a game copy, worked out once and kept. */
+  private async installInfo(game: ManagedGame): Promise<InstallInfo> {
+    if (!game.install) {
+      game.install = (await inspectFolder(game.defId, game.installPath, this.env, (await findMinecraftLauncher()) ?? undefined)).install;
+      this.changed();
+    }
+    return game.install;
+  }
+
+  /** Launcher executables Lattice found itself; main starts nothing else outside a game folder. */
+  launcherExecutables(): string[] {
+    return this.store.state.games.map((g) => g.install?.launcherExe).filter(Boolean) as string[];
+  }
+
+  private pluginsFolder(game: ManagedGame, def: GameDef): string {
+    const base = def.pluginsTxt!.folder;
+    if (def.id !== 'skyrimse') return base;
+    // Skyrim SE keeps plugins.txt in a folder of its own for each store
+    const suffix: Partial<Record<string, string>> = { gog: ' GOG', epic: ' EPIC', xbox: ' MS' };
+    return base + (suffix[game.install?.store ?? ''] ?? '');
   }
 
   async minecraftVersions(): Promise<string[]> {
@@ -178,18 +211,21 @@ export class Service extends EventEmitter {
     if (!def) throw new Error(t('Неизвестная игра'));
     const st = await fs.stat(installPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(t('Папка игры не найдена'));
+    // which launcher or store the folder belongs to; a Prism instance folder becomes its game folder
+    const found = await inspectFolder(defId, installPath, this.env, (await findMinecraftLauncher()) ?? undefined);
+    installPath = found.path;
     const id = `${defId}-${randomUUID().slice(0, 6)}`;
     const profile: Profile = {
       id: randomUUID(),
       gameId: id,
       name: t('Основной'),
-      context: { gameDefId: defId, gameVersion: ctx.gameVersion, loader: ctx.loader ?? def.loaders?.[0] },
+      context: { gameDefId: defId, gameVersion: ctx.gameVersion ?? found.gameVersion, loader: ctx.loader ?? found.loader ?? def.loaders?.[0] },
       mods: {},
       rules: [],
       collections: [],
       createdAt: new Date().toISOString(),
     };
-    const game: ManagedGame = { id, defId, name: def.name, installPath, activeProfileId: profile.id, addedAt: new Date().toISOString() };
+    const game: ManagedGame = { id, defId, name: def.name, installPath, activeProfileId: profile.id, addedAt: new Date().toISOString(), install: found.install };
     this.store.state.games.push(game);
     this.store.state.profiles.push(profile);
     this.store.state.activeGameId = id;
@@ -199,7 +235,7 @@ export class Service extends EventEmitter {
 
   async removeGame(id: string) {
     this.game(id);
-    await this.purge(id).catch(() => 0);
+    await this.purge(id); // files the game still holds open would otherwise stay there for good
     const s = this.store.state;
     const profileIds = new Set(s.profiles.filter((p) => p.gameId === id).map((p) => p.id));
     s.games = s.games.filter((g) => g.id !== id);
@@ -255,7 +291,7 @@ export class Service extends EventEmitter {
     const game = this.game(gameId);
     this.profile(profileId);
     if (game.activeProfileId === profileId) return;
-    await this.purge(gameId).catch(() => 0);
+    await this.purge(gameId); // stop here rather than mix two profiles in the game folder
     game.activeProfileId = profileId;
     this.changed();
     await this.deploy(profileId).catch((e) => this.toast('err', t('Развёртывание: {0}', (e as Error).message)));
@@ -270,7 +306,34 @@ export class Service extends EventEmitter {
     const game = this.game(p.gameId);
     const def = this.defOf(game);
     const pluginCheck = def.pluginsTxt ? await this.pluginCheck(p, game, def, order) : undefined;
-    return checkCompatibility(p, this.store.state.collections, overlaps, pluginCheck);
+    const jars = def.kind === 'minecraft' ? await this.jarMetas(p).catch(() => undefined) : undefined;
+    return checkCompatibility(p, this.store.state.collections, overlaps, pluginCheck, jars);
+  }
+
+  private jarCache = new Map<string, { mtime: number; meta: JarMeta }>();
+
+  /** What the jars of each enabled Minecraft mod declare, read once per file. */
+  private async jarMetas(p: Profile): Promise<Map<string, JarMeta>> {
+    const out = new Map<string, JarMeta>();
+    for (const m of Object.values(p.mods)) {
+      if (!m.enabled || !m.stagedPath) continue;
+      const jars = (await stagedFiles(m.stagedPath).catch(() => [] as string[])).filter((r) => /^mods\/[^/]+\.jar$/i.test(r));
+      const metas: JarMeta[] = [];
+      for (const rel of jars) {
+        const file = path.join(m.stagedPath, rel);
+        const st = await fs.stat(file).catch(() => null);
+        if (!st) continue;
+        const hit = this.jarCache.get(file);
+        if (hit && hit.mtime === st.mtimeMs) metas.push(hit.meta);
+        else {
+          const meta = await readJarMeta(file);
+          this.jarCache.set(file, { mtime: st.mtimeMs, meta });
+          metas.push(meta);
+        }
+      }
+      if (metas.length) out.set(m.key, { ids: metas.flatMap((x) => x.ids), versions: Object.assign({}, ...metas.map((x) => x.versions)), depends: metas.flatMap((x) => x.depends), breaks: metas.flatMap((x) => x.breaks) });
+    }
+    return out;
   }
 
   /** Plugins the enabled mods ship (in load order) and what the game already has. */
@@ -476,7 +539,7 @@ export class Service extends EventEmitter {
     return this.dir('downloads', id.slice(0, 2), id, safeName(f.filename));
   }
 
-  private async fetchFile(f: ModFile, title: string): Promise<string> {
+  private async fetchFile(f: ModFile, title: string, gameId?: string): Promise<string> {
     if (f.url.startsWith(STAGED_PREFIX)) return f.url.slice(STAGED_PREFIX.length);
     if (f.url.startsWith('file:')) return fileURLToPath(f.url);
     const dest = this.cachePath(f);
@@ -490,7 +553,7 @@ export class Service extends EventEmitter {
       if (!this.isTrusted(url)) throw new Error(t('Nexus вернул ссылку на неизвестный хост: {0}', new URL(url).hostname));
       // Free accounts are limited by Nexus per connection; one connection keeps within their terms.
       const premium = this.settings.nexusUser?.premium === true;
-      return this.downloads.enqueue({ url, dest, title, size: f.size, hashes: f.hashes, maxConnections: premium ? undefined : 1 }).done;
+      return this.downloads.enqueue({ url, dest, title, size: f.size, hashes: f.hashes, maxConnections: premium ? undefined : 1, gameId }).done;
     }
     if (!this.isTrusted(f.url)) {
       let host = f.url;
@@ -501,7 +564,7 @@ export class Service extends EventEmitter {
       }
       throw new Error(t('источник {0} не в списке доверенных (Настройки → Источники)', host));
     }
-    return this.downloads.enqueue({ url: f.url, dest, title, size: f.size, hashes: f.hashes }).done;
+    return this.downloads.enqueue({ url: f.url, dest, title, size: f.size, hashes: f.hashes, gameId }).done;
   }
 
   private primaryFiles(v: ModVersion): ModFile[] {
@@ -525,7 +588,7 @@ export class Service extends EventEmitter {
       [...plan.install, ...plan.update].map(async (it) => {
         const files = this.primaryFiles(it.version);
         if (files.length !== 1 || files[0].url.startsWith(STAGED_PREFIX)) return;
-        const file = await this.fetchFile(files[0], it.title);
+        const file = await this.fetchFile(files[0], it.title, profile.gameId);
         const config = await inspectFomod(file).catch(() => null);
         if (!config) return;
         const known = it.choices && validateChoices(config, it.choices, state).length === 0 ? it.choices : undefined;
@@ -555,7 +618,7 @@ export class Service extends EventEmitter {
         try {
           const files = this.primaryFiles(it.version);
           if (files.length === 0) throw new Error(t('у версии нет файлов'));
-          const paths = await Promise.all(files.map((f) => this.fetchFile(f, it.title)));
+          const paths = await Promise.all(files.map((f) => this.fetchFile(f, it.title, game.id)));
           const root = this.dir('staging', game.id);
           const version = { ...it.version, files };
           let res;
@@ -631,7 +694,7 @@ export class Service extends EventEmitter {
     if (!m) throw new Error(t('Мод не найден'));
     m.enabled = enabled;
     this.changed();
-    await this.deploy(profileId).catch(() => undefined);
+    await this.redeploy(profileId);
   }
 
   /** Mods that need `key` (directly) and are enabled. */
@@ -681,7 +744,7 @@ export class Service extends EventEmitter {
     const gone = [...plan.remove, ...(opts.withDeps ? plan.deps : [])].map((k) => p.mods[k]).filter(Boolean);
     applyRemoval(p, plan, opts);
     this.changed();
-    await this.deploy(profileId).catch(() => undefined);
+    await this.redeploy(profileId);
     const leftovers = opts.thorough ? await this.findLeftovers(p.gameId, gone) : [];
     return { removed: gone.map((m) => m.key), blockedBy: [], leftovers };
   }
@@ -710,6 +773,7 @@ export class Service extends EventEmitter {
       stagingRoot: this.dir('staging', game.id),
       cachePathOf: (f) => this.cachePath(f),
       inUse,
+      owned: await ownedFiles(this.dir('deploy', game.id, 'manifest.json'), this.deployRoot(game)),
     });
     this.pendingLeftovers = new Map(list.map((l) => [path.resolve(l.path).toLowerCase(), l.size]));
     return list;
@@ -736,14 +800,14 @@ export class Service extends EventEmitter {
     p.rules = p.rules.filter((r) => !(r.subject === rule.subject && r.other === rule.other) && !(r.subject === rule.other && r.other === rule.subject));
     p.rules.push(rule);
     this.changed();
-    await this.deploy(profileId).catch(() => undefined);
+    await this.redeploy(profileId);
   }
 
   async removeRule(profileId: string, rule: OrderRule) {
     const p = this.profile(profileId);
     p.rules = p.rules.filter((r) => !sameRule(r, rule));
     this.changed();
-    await this.deploy(profileId).catch(() => undefined);
+    await this.redeploy(profileId);
   }
 
   /** User-declared link between two installed mods (kept across updates). */
@@ -839,6 +903,77 @@ export class Service extends EventEmitter {
     this.toast('ok', t('Коллекция сохранена: {0}', path.basename(file)));
   }
 
+  /** Whether CurseForge can be used: a key came with the build or the user gave one. */
+  curseforgeAvailable(): boolean {
+    return this.sources.curseforge.available();
+  }
+
+  /** The user's Modrinth collections (and follows, with a token). */
+  modrinthAccount() {
+    return this.sources.modrinth.account(this.settings.modrinthUser);
+  }
+
+  modrinthList(list: { collection: string } | { follows: true }) {
+    return this.sources.modrinth.listProjects(list);
+  }
+
+  /** The profile as a collection file: exact versions, hashes, rules and installer options. */
+  async exportProfile(profileId: string, file: string) {
+    const p = this.profile(profileId);
+    const game = this.game(p.gameId);
+    const c = fromProfile(p, { name: p.name, version: '1.0.0', author: '', description: t('Профиль «{0}» ({1})', p.name, game.name) }, this.store.state.collections);
+    await fs.writeFile(file, JSON.stringify(c, null, 2));
+    this.toast('ok', t('Профиль сохранён: {0}', path.basename(file)));
+  }
+
+  /** Games, profiles, collections, snapshots and settings in one file; no keys, no mod files. */
+  async backupAll(file: string): Promise<{ games: number; profiles: number; collections: number }> {
+    const st = this.state();
+    const { nexusUser: _u, githubToken: _g, ...settings } = st.settings;
+    const games = st.games.map(({ install: _i, ...g }) => g);
+    const doc = { schema: 'lattice.backup/1', app: APP_VERSION, createdAt: new Date().toISOString(), state: { ...st, games, settings, local: this.store.state.local } };
+    await fs.writeFile(file, JSON.stringify(doc, null, 1));
+    return { games: games.length, profiles: st.profiles.length, collections: st.collections.length };
+  }
+
+  /**
+   * Replaces games, profiles, collections and snapshots with a backup. The
+   * current state is kept as state.json.before-restore; keys stay as they are,
+   * launchers are looked up again, missing mod files are fetched by the health check.
+   */
+  async restoreBackup(file: string): Promise<{ games: number; profiles: number }> {
+    let doc: { schema?: string; state?: Partial<Persisted> } | null = null;
+    try {
+      doc = JSON.parse(await fs.readFile(file, 'utf8'));
+    } catch {
+      doc = null;
+    }
+    const s = doc?.state;
+    if (doc?.schema !== 'lattice.backup/1' || !s || !Array.isArray(s.games) || !Array.isArray(s.profiles)) throw new Error(t('Это не резервная копия Lattice'));
+    await this.store.keepCopy('.before-restore');
+    const cur = this.store.state;
+    const games = s.games.filter((g) => g && typeof g.id === 'string' && gameDef(g.defId)).map(({ install: _i, ...g }) => g as ManagedGame);
+    const ids = new Set(games.map((g) => g.id));
+    cur.games = games;
+    cur.profiles = s.profiles.filter((p) => p && ids.has(p.gameId));
+    const profileIds = new Set(cur.profiles.map((p) => p.id));
+    cur.collections = Array.isArray(s.collections) ? s.collections : [];
+    cur.snapshots = (Array.isArray(s.snapshots) ? s.snapshots : []).filter((x) => profileIds.has(x.profileId));
+    cur.activeGameId = s.activeGameId && ids.has(s.activeGameId) ? s.activeGameId : games[0]?.id;
+    cur.local = { ...cur.local, ...(s.local ?? {}) };
+    for (const g of games) if (!profileIds.has(g.activeProfileId)) g.activeProfileId = cur.profiles.find((p) => p.gameId === g.id)?.id ?? g.activeProfileId;
+    const b = (s.settings ?? {}) as Partial<Settings>;
+    // only plain preferences come from the file; keys, trusted hosts and the data folder stay
+    const prefs: Partial<Settings> = {};
+    for (const k of ['theme', 'maxParallelDownloads', 'maxConnectionsPerFile', 'minSegmentMiB', 'deployMethod', 'enabledSources', 'includeRecommended', 'language'] as const) {
+      if (b[k] !== undefined) (prefs as Record<string, unknown>)[k] = b[k];
+    }
+    cur.settings = { ...defaultSettings(cur.settings.dataRoot), ...cur.settings };
+    this.updateSettings(prefs);
+    this.changed();
+    return { games: cur.games.length, profiles: cur.profiles.length };
+  }
+
   async importCollectionFile(file: string): Promise<Collection> {
     const c = /\.mrpack$/i.test(file)
       ? await importMrpack(file, this.sources.modrinth, this.dir('staging', '_shared'))
@@ -860,7 +995,7 @@ export class Service extends EventEmitter {
     const v = versions.sort((a, b) => Date.parse(b.published) - Date.parse(a.published))[0];
     if (!v) throw new Error(t('У сборки нет версий'));
     const f = v.files.find((x) => x.primary) ?? v.files[0];
-    const file = await this.fetchFile(f, t('Сборка {0}', v.name ?? v.version));
+    const file = await this.fetchFile(f, t('Сборка {0}', v.name ?? v.version), this.store.state.activeGameId);
     const c = await importMrpack(file, this.sources.modrinth, this.dir('staging', '_shared'));
     this.upsertCollection(c);
     return c;
@@ -882,7 +1017,7 @@ export class Service extends EventEmitter {
     for (const m of Object.values(p.mods)) m.requiredBy = m.requiredBy.filter((r) => r !== `collection:${collectionId}`);
     const removed = collectOrphans(p);
     this.changed();
-    await this.deploy(profileId).catch(() => undefined);
+    await this.redeploy(profileId);
     return removed;
   }
 
@@ -892,30 +1027,41 @@ export class Service extends EventEmitter {
     return path.join(game.installPath, this.defOf(game).deployDir);
   }
 
+  private deployOptions(p: Profile, game: ManagedGame): DeployOptions {
+    return {
+      root: this.deployRoot(game),
+      order: computeOrder(Object.values(p.mods), p.rules).order,
+      mods: p.mods,
+      manifestPath: this.dir('deploy', game.id, 'manifest.json'),
+      backupDir: this.dir('deploy', game.id, 'backup'),
+      method: this.settings.deployMethod,
+    };
+  }
+
+  /** Re-applies the active profile after a change; a problem becomes a message instead of undoing the change. */
+  private async redeploy(profileId: string) {
+    const p = this.profile(profileId);
+    if (this.game(p.gameId).activeProfileId !== profileId) return;
+    await this.deploy(profileId).catch((e) => this.toast('err', (e as Error).message));
+  }
+
   async deploy(profileId: string): Promise<DeployResult> {
     const p = this.profile(profileId);
     const game = this.game(p.gameId);
     if (game.activeProfileId !== profileId) throw new Error(t('Профиль не активен'));
     const st = await fs.stat(game.installPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(t('Папка игры не найдена: {0}', game.installPath));
-    const { order } = computeOrder(Object.values(p.mods), p.rules);
-    const res = await deploy({
-      root: this.deployRoot(game),
-      order,
-      mods: p.mods,
-      manifestPath: this.dir('deploy', game.id, 'manifest.json'),
-      backupDir: this.dir('deploy', game.id, 'backup'),
-      method: this.settings.deployMethod,
-    });
+    const res = await deploy(this.deployOptions(p, game));
     const def = this.defOf(game);
     if (def.pluginsTxt) {
       const plugins = (await this.pluginOrder(profileId)).map((x) => x.name);
-      await writePluginsTxt(pluginsTxtPath(def.pluginsTxt.folder), this.dir('deploy', game.id), plugins);
+      await writePluginsTxt(pluginsTxtPath(this.pluginsFolder(game, def)), this.dir('deploy', game.id), plugins);
     }
     p.deployedAt = new Date().toISOString();
     this.changed();
     const out = { ...res, root: this.deployRoot(game) };
     this.emit('deployed', { profileId, ...out });
+    if (res.failed?.length) throw new Error(lockedMessage(res.failed));
     return out;
   }
 
@@ -929,20 +1075,47 @@ export class Service extends EventEmitter {
     const def = this.defOf(game);
     const p = this.profile(game.activeProfileId);
     await this.deploy(p.id);
-    if (def.kind === 'minecraft') {
-      if (!(await isOfficialMinecraftDir(game.installPath))) {
-        throw new Error(t('Это папка стороннего лаунчера (Prism, MultiMC, TLauncher и т. п.): моды уже лежат в её mods/, запустите этот экземпляр в самом лаунчере.'));
-      }
-      if (!p.context.gameVersion) throw new Error(t('Укажите версию Minecraft у профиля (Настройки → профиль), чтобы поставить загрузчик под неё.'));
-      const res = await installMinecraftLoader(game.installPath, p.context.gameVersion, p.context.loader ?? 'fabric', p.id, p.name);
-      const exe = await findMinecraftLauncher();
-      if (!exe) return { note: t('Профиль «{0}» добавлен в лаунчер Minecraft. Откройте лаунчер, выберите этот профиль и нажмите «Играть».', res.profileName) };
-      await this.launcher({ kind: 'exe', path: exe });
-      return { note: t('Открываем лаунчер Minecraft: выберите профиль «{0}» и нажмите «Играть».', res.profileName) };
-    }
-    const target = await gameLaunchTarget(def, game.installPath);
+    if (def.kind === 'minecraft') return this.launchMinecraft(game, p);
+    const target = await gameLaunchTarget(def, game.installPath, await this.installInfo(game));
     await this.launcher(target);
-    return { note: target.kind === 'steam' ? t('Запускаем {0} через Steam', game.name) : t('Запускаем {0}', path.basename(target.path)) };
+    if (target.kind === 'steam') return { note: t('Запускаем {0} через Steam', game.name) };
+    if (target.kind === 'url') return { note: t('Запускаем {0} через Epic Games', game.name) };
+    return { note: t('Запускаем {0}', path.basename(target.path)) };
+  }
+
+  /**
+   * Minecraft starts through the launcher that owns the folder: Prism and MultiMC
+   * start the instance directly, Legacy Launcher starts the chosen version, the
+   * official launcher gets a ready profile; Fabric and Quilt are installed first.
+   */
+  private async launchMinecraft(game: ManagedGame, p: Profile): Promise<{ note: string }> {
+    const info = await this.installInfo(game);
+    const launcher = info.launcher ?? 'other';
+    const name = launcherName(launcher) || t('лаунчер');
+    if (launcher === 'prism' || launcher === 'multimc') {
+      if (!info.launcherExe || !info.instanceId) return { note: t('Моды уже в папке экземпляра. Запустите его в {0}.', name) };
+      await this.launcher({ kind: 'exe', path: info.launcherExe, args: ['--launch', info.instanceId] });
+      return { note: t('{0} запускает экземпляр «{1}» с модами профиля.', name, info.instanceId) };
+    }
+    if (launcher === 'official' || launcher === 'legacy' || launcher === 'tlauncher') {
+      if (!p.context.gameVersion) throw new Error(t('Укажите версию Minecraft у профиля (Настройки → профиль), чтобы поставить загрузчик под неё.'));
+      const res = await installMinecraftLoader(info.launcherRoot ?? game.installPath, p.context.gameVersion, p.context.loader ?? 'fabric', p.id, p.name, game.installPath);
+      if (launcher === 'official') {
+        const exe = info.launcherExe ?? (await findMinecraftLauncher());
+        if (!exe) return { note: t('Профиль «{0}» добавлен в лаунчер Minecraft. Откройте лаунчер, выберите этот профиль и нажмите «Играть».', res.profileName) };
+        await this.launcher({ kind: 'exe', path: exe });
+        return { note: t('Открываем лаунчер Minecraft: выберите профиль «{0}» и нажмите «Играть».', res.profileName) };
+      }
+      if (launcher === 'legacy' && info.launcherExe) {
+        await this.launcher({ kind: 'exe', path: info.launcherExe, args: ['--version', res.versionId, '--launch'] });
+        return { note: t('Legacy Launcher запустит версию {0} через несколько секунд.', res.versionId) };
+      }
+      if (info.launcherExe) await this.launcher({ kind: 'exe', path: info.launcherExe });
+      return { note: t('Версия {0} добавлена в {1}: выберите её в лаунчере и нажмите «Играть».', res.versionId, name) };
+    }
+    // CurseForge, Modrinth App and ATLauncher keep versions themselves
+    if (info.launcherExe) await this.launcher({ kind: 'exe', path: info.launcherExe });
+    return { note: t('Моды уже в папке экземпляра. Запустите его в {0}.', name) };
   }
 
   /** Points a game at a new folder (it was moved); the old folder is cleaned first when it still exists. */
@@ -950,8 +1123,10 @@ export class Service extends EventEmitter {
     const game = this.game(gameId);
     const st = await fs.stat(installPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(t('Папка не найдена'));
-    if (await fs.stat(game.installPath).catch(() => null)) await this.purge(gameId).catch(() => 0);
-    game.installPath = installPath;
+    const found = await inspectFolder(game.defId, installPath, this.env, (await findMinecraftLauncher()) ?? undefined);
+    if (await fs.stat(game.installPath).catch(() => null)) await this.purge(gameId);
+    game.installPath = found.path;
+    game.install = found.install;
     this.changed();
     await this.deploy(game.activeProfileId).catch((e) => this.toast('err', (e as Error).message));
   }
@@ -971,6 +1146,27 @@ export class Service extends EventEmitter {
       }
       const p = this.store.state.profiles.find((x) => x.id === game.activeProfileId);
       if (!p) continue;
+      const def = this.defOf(game);
+      if (def.kind === 'minecraft') {
+        // what the launcher runs in this folder now (the user may have changed it there)
+        const now = await inspectFolder(game.defId, game.installPath, this.env, (await findMinecraftLauncher()) ?? undefined).catch(() => null);
+        if (now && samePath(now.path, game.installPath)) {
+          if (JSON.stringify(now.install) !== JSON.stringify(game.install)) {
+            game.install = now.install;
+            this.changed();
+          }
+          const ctx = p.context;
+          if (now.gameVersion && (now.gameVersion !== ctx.gameVersion || (now.loader && now.loader !== ctx.loader))) {
+            out.push({
+              id: `mcver:${p.id}`,
+              title: t('{0}: версия экземпляра не совпадает с профилем', game.name),
+              detail: t('{0} запускает Minecraft {1} {2}, а профиль Lattice рассчитан на {3} {4}. Lattice возьмёт версию экземпляра и перепроверит моды.', launcherName(now.install.launcher) || t('лаунчер'), now.gameVersion, now.loader ?? '', ctx.gameVersion ?? '—', ctx.loader ?? ''),
+              fixable: true,
+              profileId: p.id,
+            });
+          }
+        }
+      } else if (!game.install) await this.installInfo(game).catch(() => undefined);
       const missing: InstalledMod[] = [];
       for (const m of Object.values(p.mods)) if (!(await fs.stat(m.stagedPath).catch(() => null))) missing.push(m);
       if (missing.length) {
@@ -993,17 +1189,24 @@ export class Service extends EventEmitter {
           profileId: p.id,
         });
       }
-      if (p.deployedAt) {
-        const v = await verifyDeployment(this.dir('deploy', game.id, 'manifest.json'), this.deployRoot(game));
-        if (v.missing.length) {
-          out.push({
-            id: `deploy:${p.id}`,
-            title: t('{0}: в папке игры не хватает файлов модов ({1})', game.name, v.missing.length),
-            detail: t('Их удалили вручную или игра обновилась. Lattice разложит их заново.'),
-            fixable: true,
-            profileId: p.id,
-          });
-        }
+      const drift = await deployDrift(this.deployOptions(p, game)).catch(() => ({ missing: [] as string[], stale: [] as string[] }));
+      if (p.deployedAt && drift.missing.length) {
+        out.push({
+          id: `deploy:${p.id}`,
+          title: t('{0}: в папке игры не хватает файлов модов ({1})', game.name, drift.missing.length),
+          detail: t('Их удалили вручную или игра обновилась. Lattice разложит их заново.'),
+          fixable: true,
+          profileId: p.id,
+        });
+      }
+      if (drift.stale.length) {
+        out.push({
+          id: `stale:${p.id}`,
+          title: t('{0}: в папке игры остались файлы убранных модов ({1})', game.name, drift.stale.length),
+          detail: t('Скорее всего, игра держала их открытыми, когда Lattice их убирал. Например: {0}. Закройте игру — Lattice уберёт их.', drift.stale.slice(0, 3).join(', ')),
+          fixable: true,
+          profileId: p.id,
+        });
       }
     }
     const busy = this.downloads.list().some((d) => ['queued', 'probing', 'downloading', 'paused', 'verifying'].includes(d.state));
@@ -1026,8 +1229,14 @@ export class Service extends EventEmitter {
           const inCycle = cycles.map((c) => new Set(c));
           p.rules = p.rules.filter((r) => !inCycle.some((c) => c.has(r.subject) && c.has(r.other)));
           this.changed();
-          await this.deploy(p.id).catch(() => undefined);
-        } else if (pr.id.startsWith('deploy:')) await this.deploy(pr.profileId!);
+          await this.deploy(p.id);
+        } else if (pr.id.startsWith('deploy:') || pr.id.startsWith('stale:')) await this.deploy(pr.profileId!);
+        else if (pr.id.startsWith('mcver:')) {
+          const p = this.profile(pr.profileId!);
+          const game = this.game(p.gameId);
+          const now = await inspectFolder(game.defId, game.installPath, this.env);
+          this.updateProfile(p.id, { context: { gameVersion: now.gameVersion, loader: now.loader ?? p.context.loader } });
+        }
         else if (pr.id === 'parts') {
           for (const r of (await walk(this.dir('downloads'))).filter((x) => x.endsWith('.part'))) await fs.rm(this.dir('downloads', r), { force: true });
         }
@@ -1050,7 +1259,7 @@ export class Service extends EventEmitter {
       if (!m) continue;
       try {
         if (m.files.some((f) => f.url.startsWith(STAGED_PREFIX))) throw new Error(t('файлы сборки можно вернуть только повторным импортом коллекции'));
-        const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title)));
+        const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title, p.gameId)));
         const res = await stageVersion(def, installedVersion(m), paths, this.dir('staging', game.id), { choices: m.choices });
         forgetStaged(res.stagedPath);
         m.stagedPath = res.stagedPath;
@@ -1059,18 +1268,19 @@ export class Service extends EventEmitter {
       }
     }
     this.changed();
-    if (game.activeProfileId === profileId) await this.deploy(profileId).catch(() => undefined);
+    if (game.activeProfileId === profileId) await this.deploy(profileId);
     if (errors.length) throw new Error(errors.join('\n'));
   }
 
   async purge(gameId: string): Promise<number> {
     const game = this.game(gameId);
-    const n = await purge(this.dir('deploy', gameId, 'manifest.json'), this.deployRoot(game), this.dir('deploy', gameId, 'backup'));
+    const r = await purge(this.dir('deploy', gameId, 'manifest.json'), this.deployRoot(game), this.dir('deploy', gameId, 'backup'));
+    if (r.failed.length) throw new Error(lockedMessage(r.failed));
     const def = this.defOf(game);
-    if (def.pluginsTxt) await restorePluginsTxt(pluginsTxtPath(def.pluginsTxt.folder), this.dir('deploy', gameId));
+    if (def.pluginsTxt) await restorePluginsTxt(pluginsTxtPath(this.pluginsFolder(game, def)), this.dir('deploy', gameId));
     for (const p of this.store.state.profiles.filter((x) => x.gameId === gameId)) p.deployedAt = undefined;
     this.changed();
-    return n;
+    return r.removed;
   }
 
   // ---------- FOMOD
@@ -1082,7 +1292,7 @@ export class Service extends EventEmitter {
     if (!m) throw new Error(t('Мод не найден'));
     const f = m.files[0];
     if (!f || f.url.startsWith(STAGED_PREFIX)) return null;
-    const file = await this.fetchFile(f, m.title);
+    const file = await this.fetchFile(f, m.title, p.gameId);
     const config = await inspectFomod(file);
     if (!config) return null;
     const { state, active } = await this.fileState(p);
@@ -1097,13 +1307,13 @@ export class Service extends EventEmitter {
     const game = this.game(p.gameId);
     const def = this.defOf(game);
     const { state } = await this.fileState(p);
-    const config = await inspectFomod(await this.fetchFile(m.files[0], m.title));
+    const config = await inspectFomod(await this.fetchFile(m.files[0], m.title, p.gameId));
     if (config) {
       const errors = validateChoices(config, choices, state);
       if (errors.length) throw new Error(errors.join('\n'));
     }
     this.snapshot(profileId, t('Перед сменой опций «{0}»', m.title));
-    const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title)));
+    const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title, p.gameId)));
     const version: ModVersion = { ...installedVersion(m) };
     const res = await stageVersion(def, version, paths, this.dir('staging', game.id), { choices, fileState: state });
     forgetStaged(res.stagedPath);
@@ -1220,6 +1430,8 @@ export class Service extends EventEmitter {
     // secrets have their own methods; the renderer only ever sees a mask
     const { nexusKeyEnc: _k, nexusUser: _u, ...safe } = patch;
     if (safe.githubToken === '••••') delete safe.githubToken;
+    if (safe.curseforgeKey === '••••') delete safe.curseforgeKey;
+    if (safe.modrinthToken === '••••') delete safe.modrinthToken;
     const next = { ...this.settings, ...safe, dataRoot: this.settings.dataRoot };
     next.maxParallelDownloads = clamp(next.maxParallelDownloads, 1, 32);
     next.maxConnectionsPerFile = clamp(next.maxConnectionsPerFile, 1, 32);
@@ -1259,3 +1471,15 @@ function sameRule(a: OrderRule, b: OrderRule) {
   return a.subject === b.subject && a.kind === b.kind && a.other === b.other;
 }
 
+/** What to tell the user when files in the game folder could not be changed. */
+function lockedMessage(failed: DeployFailure[]): string {
+  const sample = failed
+    .slice(0, 3)
+    .map((f) => `${f.rel} (${f.error})`)
+    .join(', ');
+  return t(
+    'Не удалось изменить в папке игры: {0}. Скорее всего, их держит открытыми запущенная игра или лаунчер — закройте их и нажмите «Применить к игре». Например: {1}',
+    plural(failed.length, 'файл', 'файла', 'файлов'),
+    sample,
+  );
+}

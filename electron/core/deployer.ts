@@ -26,7 +26,7 @@ interface Manifest {
 const norm = (rel: string) => (process.platform === 'win32' ? rel.toLowerCase() : rel);
 const fileCache = new Map<string, string[]>();
 
-async function stagedFiles(dir: string): Promise<string[]> {
+export async function stagedFiles(dir: string): Promise<string[]> {
   let list = fileCache.get(dir);
   if (!list) {
     list = await walk(dir);
@@ -81,8 +81,15 @@ export interface DeployOptions {
   method: 'hardlink' | 'copy';
 }
 
-export async function deploy(o: DeployOptions): Promise<DeployResult> {
-  const man = await readManifest(o.manifestPath, o.root);
+export interface DeployFailure {
+  rel: string;
+  error: string;
+}
+
+const failure = (rel: string, e: unknown): DeployFailure => ({ rel, error: (e as NodeJS.ErrnoException).code ?? (e as Error).message });
+
+/** Files the profile wants in the game folder: later mods in the order win. */
+async function wantedFiles(o: Pick<DeployOptions, 'order' | 'mods' | 'method'>) {
   const want = new Map<string, Owned>();
   const contenders = new Map<string, string[]>();
   for (const key of o.order) {
@@ -94,67 +101,98 @@ export async function deploy(o: DeployOptions): Promise<DeployResult> {
       want.set(k, { rel, owner: key, staged: path.join(m.stagedPath, rel), method: o.method });
     }
   }
+  return { want, contenders };
+}
 
+/** The manifest for this folder; one written for another folder (the game moved) owns nothing here. */
+async function manifestFor(file: string, root: string): Promise<Manifest> {
+  const man = await readManifest(file, root);
+  if (norm(path.resolve(man.root || root)) !== norm(path.resolve(root))) return { root, files: {}, backups: [], createdDirs: [], deployedAt: '' };
+  return man;
+}
+
+/**
+ * Brings the game folder to the profile. A file that cannot be changed (the
+ * game or launcher keeps it open) does not stop the rest: it is reported in
+ * `failed` and stays in the manifest, so the next run tries again.
+ */
+export async function deploy(o: DeployOptions): Promise<DeployResult> {
+  const man = await manifestFor(o.manifestPath, o.root);
+  const { want, contenders } = await wantedFiles(o);
+  const failed: DeployFailure[] = [];
   let removed = 0;
   let backedUp = 0;
   let deployed = 0;
   const methods = new Set<'hardlink' | 'copy'>();
 
-  // 1. Remove files we own that are no longer wanted or changed owner.
-  for (const [k, owned] of Object.entries(man.files)) {
-    const w = want.get(k);
-    if (w && w.staged === owned.staged) continue;
-    const target = path.join(o.root, owned.rel);
-    await fs.rm(target, { force: true });
-    delete man.files[k];
-    removed++;
-    if (!w && man.backups.includes(k)) {
-      await restoreBackup(o.backupDir, o.root, owned.rel);
-      man.backups = man.backups.filter((b) => b !== k);
-    }
-  }
-
-  // 2. Place wanted files.
-  for (const [k, w] of want) {
-    const target = path.join(o.root, w.rel);
-    const cur = man.files[k];
-    if (cur && cur.staged === w.staged && (await exists(target))) {
-      methods.add(cur.method);
-      continue;
-    }
-    if (!cur && (await exists(target))) {
-      // a file that belongs to the game or the user: keep a copy to restore later
-      const bak = path.join(o.backupDir, w.rel);
-      await fs.mkdir(path.dirname(bak), { recursive: true });
-      await fs.rm(bak, { force: true });
-      await fs.rename(target, bak).catch(async () => {
-        await fs.copyFile(target, bak);
-        await fs.rm(target, { force: true });
-      });
-      if (!man.backups.includes(k)) man.backups.push(k);
-      backedUp++;
-    } else {
-      await fs.rm(target, { force: true });
-    }
-    await mkdirTracked(path.dirname(target), o.root, man);
-    let method: 'hardlink' | 'copy' = o.method;
-    if (method === 'hardlink') {
+  try {
+    // 1. Remove files we own that are no longer wanted or changed owner.
+    for (const [k, owned] of Object.entries(man.files)) {
+      const w = want.get(k);
+      if (w && w.staged === owned.staged) continue;
       try {
-        await fs.link(w.staged, target);
-      } catch {
-        method = 'copy'; // different volume or file system without hard links
+        await fs.rm(path.join(o.root, owned.rel), { force: true });
+      } catch (e) {
+        failed.push(failure(owned.rel, e));
+        continue;
+      }
+      delete man.files[k];
+      removed++;
+      if (!w && man.backups.includes(k)) {
+        await restoreBackup(o.backupDir, o.root, owned.rel);
+        man.backups = man.backups.filter((b) => b !== k);
       }
     }
-    if (method === 'copy') await fs.copyFile(w.staged, target);
-    methods.add(method);
-    man.files[k] = { ...w, method };
-    deployed++;
-  }
 
-  await removeEmptyDirs(man);
-  man.deployedAt = new Date().toISOString();
-  await fs.mkdir(path.dirname(o.manifestPath), { recursive: true });
-  await fs.writeFile(o.manifestPath, JSON.stringify(man, null, 1));
+    // 2. Place wanted files.
+    for (const [k, w] of want) {
+      const target = path.join(o.root, w.rel);
+      const cur = man.files[k];
+      if (cur && cur.staged === w.staged && (await exists(target))) {
+        methods.add(cur.method);
+        continue;
+      }
+      if (cur && cur.staged !== w.staged) continue; // the old version could not be removed above
+      try {
+        if (!cur && (await exists(target))) {
+          // a file that belongs to the game or the user: keep a copy to restore later
+          const bak = path.join(o.backupDir, w.rel);
+          await fs.mkdir(path.dirname(bak), { recursive: true });
+          await fs.rm(bak, { force: true });
+          await fs.rename(target, bak).catch(async () => {
+            await fs.copyFile(target, bak);
+            await fs.rm(target, { force: true });
+          });
+          if (!man.backups.includes(k)) man.backups.push(k);
+          backedUp++;
+        } else {
+          await fs.rm(target, { force: true });
+        }
+        await mkdirTracked(path.dirname(target), o.root, man);
+        let method: 'hardlink' | 'copy' = o.method;
+        if (method === 'hardlink') {
+          try {
+            await fs.link(w.staged, target);
+          } catch {
+            method = 'copy'; // different volume or file system without hard links
+          }
+        }
+        if (method === 'copy') await fs.copyFile(w.staged, target);
+        methods.add(method);
+        man.files[k] = { ...w, method };
+        deployed++;
+      } catch (e) {
+        failed.push(failure(w.rel, e));
+      }
+    }
+
+    await removeEmptyDirs(man);
+  } finally {
+    man.root = o.root;
+    man.deployedAt = new Date().toISOString();
+    await fs.mkdir(path.dirname(o.manifestPath), { recursive: true });
+    await fs.writeFile(o.manifestPath, JSON.stringify(man, null, 1));
+  }
 
   const conflicts = [...contenders]
     .filter(([, keys]) => keys.length > 1)
@@ -165,33 +203,61 @@ export async function deploy(o: DeployOptions): Promise<DeployResult> {
     backedUp,
     method: methods.size > 1 ? 'mixed' : ([...methods][0] ?? o.method),
     conflicts,
+    failed,
   };
 }
 
-/** Files the manifest says are deployed but that are no longer in the game folder. */
-export async function verifyDeployment(manifestPath: string, root: string): Promise<{ missing: string[] }> {
-  const man = await readManifest(manifestPath, root);
+/**
+ * How the game folder differs from what the profile wants, without changing it:
+ * `missing` — our files that are gone, `stale` — our files that should be gone.
+ */
+export async function deployDrift(o: DeployOptions): Promise<{ missing: string[]; stale: string[] }> {
+  const man = await manifestFor(o.manifestPath, o.root);
+  const { want } = await wantedFiles(o);
   const missing: string[] = [];
-  for (const owned of Object.values(man.files)) if (!(await exists(path.join(root, owned.rel)))) missing.push(owned.rel);
-  return { missing };
+  const stale: string[] = [];
+  for (const [k, owned] of Object.entries(man.files)) {
+    const here = await exists(path.join(o.root, owned.rel));
+    const w = want.get(k);
+    if (w && w.staged === owned.staged) {
+      if (!here) missing.push(owned.rel);
+    } else if (here) stale.push(owned.rel);
+  }
+  return { missing, stale };
 }
 
-export async function purge(manifestPath: string, root: string, backupDir: string): Promise<number> {
+/** Files Lattice placed into the game folder (relative paths), to tell them from foreign ones. */
+export async function ownedFiles(manifestPath: string, root: string): Promise<Set<string>> {
+  const man = await manifestFor(manifestPath, root);
+  return new Set(Object.keys(man.files));
+}
+
+/** Takes every file we placed out of the game folder and restores the game's own files. */
+export async function purge(manifestPath: string, root: string, backupDir: string): Promise<{ removed: number; failed: DeployFailure[] }> {
   const man = await readManifest(manifestPath, root);
-  let n = 0;
-  for (const owned of Object.values(man.files)) {
-    await fs.rm(path.join(root, owned.rel), { force: true });
-    n++;
+  const base = man.root || root;
+  const failed: DeployFailure[] = [];
+  const relOf = new Map(Object.entries(man.files).map(([k, f]) => [k, f.rel]));
+  let removed = 0;
+  for (const [k, owned] of Object.entries(man.files)) {
+    try {
+      await fs.rm(path.join(base, owned.rel), { force: true });
+    } catch (e) {
+      failed.push(failure(owned.rel, e));
+      continue;
+    }
+    delete man.files[k];
+    removed++;
   }
-  for (const k of man.backups) {
-    const rel = Object.values(man.files).find((f) => norm(f.rel) === k)?.rel ?? k;
-    await restoreBackup(backupDir, root, rel);
+  for (const k of [...man.backups]) {
+    if (man.files[k]) continue; // our file is still there; restore once it is gone
+    await restoreBackup(backupDir, base, relOf.get(k) ?? k);
+    man.backups = man.backups.filter((b) => b !== k);
   }
-  man.files = {};
-  man.backups = [];
   await removeEmptyDirs(man);
-  await fs.rm(manifestPath, { force: true });
-  return n;
+  if (failed.length) await fs.writeFile(manifestPath, JSON.stringify(man, null, 1));
+  else await fs.rm(manifestPath, { force: true });
+  return { removed, failed };
 }
 
 async function restoreBackup(backupDir: string, root: string, rel: string) {

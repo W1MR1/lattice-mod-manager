@@ -22,6 +22,8 @@ export const DEFAULT_TRUSTED_HOSTS = [
   'gitlab.com',
   'nexusmods.com',
   'nexus-cdn.com',
+  'gamebanana.com',
+  'forgecdn.net',
 ];
 
 export function defaultSettings(dataRoot: string): Settings {
@@ -32,7 +34,7 @@ export function defaultSettings(dataRoot: string): Settings {
     maxConnectionsPerFile: 8,
     minSegmentMiB: 1,
     deployMethod: 'hardlink',
-    enabledSources: { modrinth: true, thunderstore: true, github: true, nexus: true, local: true },
+    enabledSources: { modrinth: true, thunderstore: true, github: true, nexus: true, gamebanana: true, curseforge: true, local: true },
     trustedHosts: DEFAULT_TRUSTED_HOSTS,
     includeRecommended: false,
     handleNxm: false,
@@ -41,6 +43,13 @@ export function defaultSettings(dataRoot: string): Settings {
 
 export class Store {
   state: Persisted;
+
+  /** Copies the state file aside, e.g. before a backup is restored over it. */
+  async keepCopy(suffix: string) {
+    await this.flush();
+    await fs.copyFile(this.file, this.file + suffix).catch(() => undefined);
+  }
+
   /** true when state.json was unreadable and the last good copy was loaded */
   recovered = false;
   private timer: NodeJS.Timeout | null = null;
@@ -56,6 +65,10 @@ export class Store {
         const loaded = JSON.parse(readFileSync(f, 'utf8')) as Partial<Persisted>;
         const settings = { ...empty.settings, ...loaded.settings };
         settings.enabledSources = { ...empty.settings.enabledSources, ...loaded.settings?.enabledSources };
+        // hosts of sources added in later versions; ones the user removed stay removed
+        const seen = new Set(settings.trustedHostsSeen ?? settings.trustedHosts);
+        for (const h of DEFAULT_TRUSTED_HOSTS) if (!seen.has(h) && !settings.trustedHosts.includes(h)) settings.trustedHosts = [...settings.trustedHosts, h];
+        settings.trustedHostsSeen = [...new Set([...(settings.trustedHostsSeen ?? []), ...DEFAULT_TRUSTED_HOSTS])];
         return { ...empty, ...loaded, settings };
       } catch {
         return null;

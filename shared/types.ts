@@ -2,7 +2,7 @@
 import type { FomodChoices, FomodConfig } from './fomod';
 import type { Lang } from './i18n';
 
-export type SourceId = 'modrinth' | 'thunderstore' | 'github' | 'nexus' | 'local';
+export type SourceId = 'modrinth' | 'thunderstore' | 'github' | 'nexus' | 'gamebanana' | 'curseforge' | 'local';
 
 /** Identifies a project at a source. `key` form is `${source}:${projectId}`. */
 export interface ModRef {
@@ -28,7 +28,7 @@ export interface ModFile {
   url: string;
   filename: string;
   size?: number;
-  hashes: { sha1?: string; sha256?: string; sha512?: string };
+  hashes: { sha1?: string; sha256?: string; sha512?: string; md5?: string };
   primary?: boolean;
   /** exact relative path under the deploy root (from modpack manifests) */
   targetPath?: string;
@@ -99,6 +99,27 @@ export interface GameDef {
   github?: { keywords: string; featured?: { repo: string; requires?: string[] }[] };
   /** Bethesda load order: plugins.txt under %LOCALAPPDATA%\<folder> */
   pluginsTxt?: { folder: string; baseMasters: string[] };
+  /** files that identify the game in a folder (relative paths), whatever store it came from */
+  exe?: string[];
+  /** game id on GameBanana */
+  gamebananaId?: number;
+}
+
+export type GameStore = 'steam' | 'gog' | 'epic' | 'xbox' | 'other';
+export type McLauncher = 'official' | 'prism' | 'multimc' | 'legacy' | 'tlauncher' | 'curseforge' | 'modrinth' | 'atlauncher' | 'other';
+
+/** Where a game copy came from and what starts it. */
+export interface InstallInfo {
+  store?: GameStore;
+  /** Epic launch id: namespace:catalogItemId:appName */
+  epicId?: string;
+  /** Minecraft: the launcher that runs this folder */
+  launcher?: McLauncher;
+  /** Prism/MultiMC instance id (its folder name) */
+  instanceId?: string;
+  /** launcher folder that holds versions/ (for home/<version> folders it is their parent) */
+  launcherRoot?: string;
+  launcherExe?: string;
 }
 
 export interface ManagedGame {
@@ -108,6 +129,8 @@ export interface ManagedGame {
   installPath: string;
   activeProfileId: string;
   addedAt: string;
+  /** store or launcher of this copy; filled when the game is added or first checked */
+  install?: InstallInfo;
 }
 
 export type InstallReason = 'explicit' | 'dependency' | 'collection';
@@ -223,7 +246,9 @@ export type IssueCode =
   | 'unresolvable'
   | 'recommended'
   | 'missing-master'
-  | 'duplicate';
+  | 'duplicate'
+  | 'jar-dependency'
+  | 'jar-breaks';
 
 export interface Fix {
   kind: 'install' | 'enable' | 'disable' | 'update' | 'add-rule' | 'apply-collection';
@@ -328,7 +353,8 @@ export interface DownloadView {
   error?: string;
   startedAt?: string;
   finishedAt?: string;
-  verified?: 'sha512' | 'sha256' | 'sha1' | 'none';
+  verified?: 'sha512' | 'sha256' | 'sha1' | 'md5' | 'none';
+  gameId?: string;
 }
 
 export interface Settings {
@@ -352,6 +378,13 @@ export interface Settings {
   updateSnoozedUntil?: number;
   /** interface language; chosen in the installer, changeable in Settings */
   language?: Lang;
+  /** CurseForge API key (the user's own; a build may carry one) */
+  curseforgeKey?: string;
+  /** Modrinth account: user name for public collections, or a personal access token */
+  modrinthUser?: string;
+  modrinthToken?: string;
+  /** default trusted hosts already offered once; a host the user removed is not added back */
+  trustedHostsSeen?: string[];
 }
 
 export interface AppState {
@@ -381,8 +414,16 @@ export interface SearchResult {
 
 export interface DetectedGame {
   defId: string;
+  /** the folder mods go to */
   path: string;
-  via: 'steam' | 'default';
+  via: GameStore | McLauncher;
+  /** instance or profile name in its launcher */
+  label?: string;
+  /** "home": a per-version folder of Legacy Launcher or TLauncher */
+  hint?: string;
+  gameVersion?: string;
+  loader?: string;
+  install: InstallInfo;
 }
 
 /** Something found wrong at start, with or without an automatic fix. */
@@ -404,6 +445,8 @@ export interface DeployResult {
   backedUp: number;
   method: 'hardlink' | 'copy' | 'mixed';
   conflicts: { path: string; winner: string; losers: string[] }[];
+  /** files that could not be changed (usually held open by the running game) */
+  failed?: { rel: string; error: string }[];
 }
 
 export const keyOf = (ref: ModRef): string => `${ref.source}:${ref.projectId}`;

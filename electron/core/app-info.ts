@@ -13,3 +13,6 @@ export const APP_NAME = 'Lattice';
  * which Nexus allows for testing, not for a public release.
  */
 export const NEXUS_SLUG: string = process.env.LATTICE_NEXUS_SLUG || '';
+
+/** CurseForge API key issued to Lattice (console.curseforge.com); empty in builds without one. */
+export const CURSEFORGE_KEY: string = process.env.LATTICE_CURSEFORGE_KEY || '';

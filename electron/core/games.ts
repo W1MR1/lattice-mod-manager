@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import type { DetectedGame, GameDef } from '../../shared/types';
+import type { GameDef } from '../../shared/types';
 import { tk } from '../../shared/i18n';
 
 export const GAME_DEFS: GameDef[] = [
@@ -13,7 +13,7 @@ export const GAME_DEFS: GameDef[] = [
     short: 'MC',
     hue: 142,
     kind: 'minecraft',
-    sources: ['modrinth', 'github', 'local'],
+    sources: ['modrinth', 'curseforge', 'github', 'local'],
     deployDir: '',
     loaders: ['fabric', 'quilt', 'neoforge', 'forge'],
     defaultPath: path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), '.minecraft'),
@@ -22,11 +22,13 @@ export const GAME_DEFS: GameDef[] = [
   },
   {
     id: 'lethal-company',
+    gamebananaId: 19344,
+    exe: ['Lethal Company.exe'],
     name: 'Lethal Company',
     short: 'LC',
     hue: 8,
     kind: 'bepinex',
-    sources: ['thunderstore', 'nexus', 'github', 'local'],
+    sources: ['thunderstore', 'nexus', 'gamebanana', 'github', 'local'],
     thunderstoreCommunity: 'lethal-company',
     steamAppId: '1966720',
     deployDir: '',
@@ -35,11 +37,13 @@ export const GAME_DEFS: GameDef[] = [
   },
   {
     id: 'valheim',
+    gamebananaId: 6506,
+    exe: ['valheim.exe'],
     name: 'Valheim',
     short: 'VH',
     hue: 32,
     kind: 'bepinex',
-    sources: ['thunderstore', 'nexus', 'github', 'local'],
+    sources: ['thunderstore', 'nexus', 'gamebanana', 'github', 'local'],
     thunderstoreCommunity: 'valheim',
     steamAppId: '892970',
     deployDir: '',
@@ -48,11 +52,13 @@ export const GAME_DEFS: GameDef[] = [
   },
   {
     id: 'riskofrain2',
+    gamebananaId: 12710,
+    exe: ['Risk of Rain 2.exe'],
     name: 'Risk of Rain 2',
     short: 'R2',
     hue: 268,
     kind: 'bepinex',
-    sources: ['thunderstore', 'github', 'local'],
+    sources: ['thunderstore', 'gamebanana', 'github', 'local'],
     thunderstoreCommunity: 'riskofrain2',
     steamAppId: '632360',
     deployDir: '',
@@ -60,11 +66,13 @@ export const GAME_DEFS: GameDef[] = [
   },
   {
     id: 'content-warning',
+    gamebananaId: 20089,
+    exe: ['Content Warning.exe'],
     name: 'Content Warning',
     short: 'CW',
     hue: 52,
     kind: 'bepinex',
-    sources: ['thunderstore', 'github', 'local'],
+    sources: ['thunderstore', 'gamebanana', 'github', 'local'],
     thunderstoreCommunity: 'content-warning',
     steamAppId: '2881650',
     deployDir: '',
@@ -72,11 +80,13 @@ export const GAME_DEFS: GameDef[] = [
   },
   {
     id: 'skyrimse',
+    gamebananaId: 25134,
+    exe: ['SkyrimSE.exe'],
     name: 'Skyrim Special Edition',
     short: 'SK',
     hue: 210,
     kind: 'generic',
-    sources: ['nexus', 'github', 'local'],
+    sources: ['nexus', 'gamebanana', 'github', 'local'],
     steamAppId: '489830',
     deployDir: 'Data',
     stripSingleRoot: true,
@@ -87,11 +97,13 @@ export const GAME_DEFS: GameDef[] = [
   },
   {
     id: 'fallout4',
+    gamebananaId: 5518,
+    exe: ['Fallout4.exe'],
     name: 'Fallout 4',
     short: 'F4',
     hue: 96,
     kind: 'generic',
-    sources: ['nexus', 'github', 'local'],
+    sources: ['nexus', 'gamebanana', 'github', 'local'],
     steamAppId: '377160',
     deployDir: 'Data',
     stripSingleRoot: true,
@@ -104,11 +116,13 @@ export const GAME_DEFS: GameDef[] = [
   },
   {
     id: 'cyberpunk2077',
+    gamebananaId: 8722,
+    exe: ['bin/x64/Cyberpunk2077.exe'],
     name: 'Cyberpunk 2077',
     short: 'CP',
     hue: 58,
     kind: 'generic',
-    sources: ['nexus', 'github', 'local'],
+    sources: ['nexus', 'gamebanana', 'github', 'local'],
     steamAppId: '1091500',
     deployDir: '',
     notes: tk('Архивы распаковываются в корень игры (archive/, bin/, r6/, red4ext/).'),
@@ -128,11 +142,13 @@ export const GAME_DEFS: GameDef[] = [
   },
   {
     id: 'stardewvalley',
+    gamebananaId: 5937,
+    exe: ['Stardew Valley.exe', 'StardewValley.exe'],
     name: 'Stardew Valley',
     short: 'SV',
     hue: 120,
     kind: 'generic',
-    sources: ['nexus', 'github', 'local'],
+    sources: ['nexus', 'gamebanana', 'github', 'local'],
     steamAppId: '413150',
     deployDir: 'Mods',
     nexusDomain: 'stardewvalley',
@@ -183,30 +199,4 @@ export async function steamLibraries(): Promise<string[]> {
     }
   }
   return [...roots];
-}
-
-export async function detectGames(): Promise<DetectedGame[]> {
-  const found: DetectedGame[] = [];
-  const libs = await steamLibraries();
-  for (const def of GAME_DEFS) {
-    if (def.steamAppId) {
-      for (const lib of libs) {
-        const acf = path.join(lib, 'steamapps', `appmanifest_${def.steamAppId}.acf`);
-        try {
-          const text = await fs.readFile(acf, 'utf8');
-          const dir = /"installdir"\s+"([^"]+)"/.exec(text)?.[1];
-          if (!dir) continue;
-          const full = path.join(lib, 'steamapps', 'common', dir);
-          if (await exists(full)) {
-            found.push({ defId: def.id, path: full, via: 'steam' });
-            break;
-          }
-        } catch {
-          /* not in this library */
-        }
-      }
-    }
-    if (def.defaultPath && (await exists(def.defaultPath))) found.push({ defId: def.id, path: def.defaultPath, via: 'default' });
-  }
-  return found;
 }

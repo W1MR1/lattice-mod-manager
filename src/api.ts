@@ -14,7 +14,8 @@ type Methods =
   | 'removeCollectionFromProfile' | 'deploy' | 'purge' | 'snapshot' | 'rollback' | 'deleteSnapshot' | 'updateSettings'
   | 'inspectPlan' | 'fomodPrompt' | 'reinstallWithChoices' | 'pluginOrder' | 'setNexusKey' | 'clearNexusKey' | 'handleNxm'
   | 'nexusSsoAvailable' | 'loginWithNexus'
-  | 'previewRemoval' | 'removeMods' | 'removeAllMods' | 'deleteLeftovers' | 'launchGame' | 'setGamePath' | 'healthCheck' | 'repair';
+  | 'previewRemoval' | 'removeMods' | 'removeAllMods' | 'deleteLeftovers' | 'launchGame' | 'setGamePath' | 'healthCheck' | 'repair'
+  | 'exportProfile' | 'backupAll' | 'restoreBackup' | 'curseforgeAvailable' | 'modrinthAccount' | 'modrinthList';
 
 type Fn<K extends Methods> = Service[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
 export type Api = { [K in Methods]: Fn<K> };
@@ -24,7 +25,8 @@ export type UpdateEvent =
   | { state: 'downloading'; percent: number }
   | { state: 'ready'; version: string }
   | { state: 'none' }
-  | { state: 'error'; error: string };
+  | { state: 'error'; error: string }
+  | { state: 'offline'; error: string };
 
 interface Bridge {
   call(method: string, ...args: unknown[]): Promise<unknown>;
@@ -33,8 +35,12 @@ interface Bridge {
   dialog(kind: 'files'): Promise<string[] | null>;
   dialog(kind: 'collection-open'): Promise<string | null>;
   dialog(kind: 'collection-save', defaultName?: string): Promise<string | null>;
+  dialog(kind: 'backup-open'): Promise<string | null>;
+  dialog(kind: 'backup-save', defaultName?: string): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   openPath(p: string): Promise<void>;
+  fileIcon(p: string): Promise<string | null>;
+  pathForFile(f: File): string;
   setTheme(t: 'dark' | 'light'): Promise<void>;
   update(action: 'check' | 'download' | 'install' | 'snooze'): Promise<void>;
   on(event: 'state', cb: (s: AppState) => void): () => void;
