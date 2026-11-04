@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lattice — демо</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #09090a;
+        color: #eceae6;
+        font-family: 'Manrope', system-ui, sans-serif;
+      }
+      main {
+        box-sizing: border-box;
+        max-width: 808px;
+        margin: 0 auto;
+        padding: 48px 24px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+      }
+      p {
+        margin: 0 0 28px;
+        color: #a9a6a0;
+        font-size: 15px;
+        line-height: 1.5;
+      }
+      .replay {
+        margin-top: 16px;
+        height: 32px;
+        padding: 0 14px;
+        border: 1px solid #2a2b30;
+        border-radius: 6px;
+        background: #151618;
+        color: #eceae6;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      @media (max-width: 560px) {
+        main {
+          padding: 32px 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

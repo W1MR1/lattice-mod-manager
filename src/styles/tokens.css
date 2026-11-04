@@ -1,0 +1,105 @@
+/* Lattice design tokens — see docs/DESIGN-SYSTEM.md */
+:root,
+:root[data-theme='dark'] {
+  --bg-0: #0e0f10;
+  --bg-1: #151618;
+  --bg-2: #1c1d20;
+  --bg-3: #25262a;
+  --line: #2a2b30;
+  --line-strong: #3a3b42;
+  --text-1: #eceae6;
+  --text-2: #a9a6a0;
+  --text-3: #6f6c67;
+  --accent: #8b7cf6;
+  --accent-hover: #a094f8;
+  --accent-ink: #0e0f10;
+  --accent-soft: rgb(139 124 246 / 0.14);
+  --ok: #4cc38a;
+  --warn: #e6a23c;
+  --err: #ef5f5f;
+  --info: #4fb3d9;
+  --ok-soft: rgb(76 195 138 / 0.12);
+  --warn-soft: rgb(230 162 60 / 0.12);
+  --err-soft: rgb(239 95 95 / 0.12);
+  --info-soft: rgb(79 179 217 / 0.12);
+  --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.45), 0 0 0 1px var(--line-strong);
+  --scrim: rgb(5 5 6 / 0.62);
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --bg-0: #f4f2ee;
+  --bg-1: #fbfaf7;
+  --bg-2: #ffffff;
+  --bg-3: #efece6;
+  --line: #e3dfd6;
+  --line-strong: #cfc9bd;
+  --text-1: #1b1a18;
+  --text-2: #5d5952;
+  --text-3: #8f8a80;
+  --accent: #5b4bd8;
+  --accent-hover: #4a3bc4;
+  --accent-ink: #ffffff;
+  --accent-soft: rgb(91 75 216 / 0.1);
+  --ok: #1f8a5b;
+  --warn: #b26b00;
+  --err: #c2304f;
+  --info: #1d7fa6;
+  --ok-soft: rgb(31 138 91 / 0.1);
+  --warn-soft: rgb(178 107 0 / 0.1);
+  --err-soft: rgb(194 48 79 / 0.09);
+  --info-soft: rgb(29 127 166 / 0.1);
+  --shadow-pop: 0 12px 32px rgb(40 30 10 / 0.16), 0 0 0 1px var(--line-strong);
+  --scrim: rgb(30 26 20 / 0.32);
+  color-scheme: light;
+}
+
+:root {
+  --font-ui: 'Manrope', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+  --lh-xs: 16px;
+  --lh-sm: 18px;
+  --lh-md: 20px;
+  --lh-lg: 22px;
+  --lh-xl: 28px;
+  --lh-2xl: 34px;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  --rail-w: 64px;
+  --header-h: 56px;
+  --tabs-h: 42px;
+  --status-h: 28px;
+  --inspector-w: 380px;
+  --row-h: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+  }
+}

@@ -1,0 +1,549 @@
+/* Lattice's own look: warm graphite, one iris accent, status colors that mean
+   status, Manrope for the interface and a mono face for versions. */
+.lt .ss-stage {
+  --ss-font: 'Manrope', system-ui, sans-serif;
+  --ss-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ss-accent: #8b7cf6;
+  --ss-accent-2: #a094f8;
+  --ss-accent-soft: rgb(139 124 246 / 0.14);
+  --ss-accent-text: #a094f8;
+  --ss-canvas: #0e0f10;
+  --ss-chrome: #0e0f10;
+  --ss-surface: #151618;
+  --ss-raised: #222327;
+  --ss-line: #2a2b30;
+  --ss-line-faint: #212226;
+  --ss-text-strong: #eceae6;
+  --ss-text: #a9a6a0;
+  --ss-text-faint: #6f6c67;
+  --ss-icon: #a9a6a0;
+  --ss-icon-faint: #6f6c67;
+  --ss-success: #4cc38a;
+  --ss-success-soft: rgb(76 195 138 / 0.13);
+  --ss-success-text: #4cc38a;
+  --ss-radius-sm: 6px;
+  --ss-radius-md: 6px;
+  --ss-radius-lg: 10px;
+  overflow: hidden;
+  background: #09090a;
+  font-family: var(--ss-font);
+}
+
+/* ---------- the window: inset top and left, off the right and the bottom */
+
+.lt-win {
+  position: absolute;
+  top: 40px;
+  left: 140px;
+  width: 700px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+
+.lt-stack {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 326px;
+}
+
+.lt-panel {
+  flex: none;
+  overflow: hidden;
+  padding-top: 14px;
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: 12px;
+  background: var(--ss-surface);
+}
+
+.lt-panel__title {
+  margin: 0 16px;
+  color: var(--ss-text-strong);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.lt-panel .lt-body {
+  min-height: 420px;
+}
+
+.lt-rail {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  /* the pitch puts the card's edges, in every state, in the gaps between tiles */
+  gap: 14px;
+  padding: 14px 0;
+}
+
+/* games past the first are filler; the card lies over them as over any chrome */
+.lt-tile:not([data-active]) {
+  border-color: var(--ss-line-faint);
+  background: #141517;
+}
+
+.lt-tile {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--ss-line);
+  border-radius: 12px;
+  background: #1a1b1e;
+}
+
+.lt-tile[data-active] {
+  border-color: var(--ss-accent);
+  box-shadow: 0 0 0 3px var(--ss-accent-soft);
+}
+
+.lt-body {
+  min-height: 480px;
+  /* the window runs 80px off the right: the columns end a full gutter inside the stage */
+  padding: 16px 120px 0 16px;
+  background: var(--ss-surface);
+}
+
+.lt .ss-stage[data-layout='compact'] .lt-body {
+  padding: 16px 16px 0;
+}
+
+/* ---------- header */
+
+.lt-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  white-space: nowrap;
+}
+
+.lt-title {
+  color: var(--ss-text-strong);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.lt .ss-stage[data-layout='compact'] .lt-title {
+  font-size: 14px;
+}
+
+.lt-ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--ss-line);
+  border-radius: var(--ss-radius-pill);
+  color: var(--ss-text);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.lt .ss-stage[data-layout='compact'] .lt-ctx + .lt-ctx {
+  display: none;
+}
+
+.lt-grow {
+  flex: 1;
+}
+
+.lt-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px 3px 3px;
+  border: 1px solid var(--ss-line);
+  border-radius: var(--ss-radius-pill);
+  background: #121315;
+}
+
+.lt .ss-stage[data-layout='compact'] .lt-health {
+  padding: 3px;
+}
+
+.lt-health__text {
+  display: grid;
+  gap: 3px;
+  color: var(--ss-text-strong);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.lt-health__text small {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 14px;
+  overflow: hidden;
+  line-height: 14px;
+  color: var(--ss-text-faint);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.lt-ring text {
+  fill: var(--ss-text-strong);
+  font-family: var(--ss-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+}
+
+/* ---------- the list */
+
+.lt-cols,
+.lt-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 60px 86px 96px;
+  align-items: center;
+  gap: 10px;
+}
+
+.lt .ss-stage[data-layout='compact'] .lt-cols,
+.lt .ss-stage[data-layout='compact'] .lt-row {
+  grid-template-columns: 26px minmax(0, 1fr) 100px;
+}
+
+.lt .ss-stage[data-layout='compact'] .lt-wide {
+  display: none;
+}
+
+.lt-cols {
+  height: 26px;
+  border-bottom: 1px solid var(--ss-line);
+  color: var(--ss-text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lt-row {
+  height: 52px;
+  /* rows below the new ones are carried down by layout: a lasting layer keeps
+     their words from stepping a pixel inside their boxes */
+  will-change: transform;
+}
+
+/* rows inside the opening track fade with it, so they stay on its layer */
+.lt-list .ss-collapse .lt-row {
+  will-change: auto;
+  border-bottom: 1px solid var(--ss-line-faint);
+  white-space: nowrap;
+}
+
+.lt-switch {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: var(--ss-radius-pill);
+  background: var(--ss-accent);
+}
+
+.lt-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #0e0f10;
+}
+
+.lt-switch--filler {
+  background: var(--ss-ink-2);
+}
+
+.lt-switch--filler::after {
+  background: var(--ss-surface);
+}
+
+.lt-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.lt-lines {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lt-lines .ss-bar {
+  max-width: 100%;
+}
+
+.lt-mod {
+  overflow: hidden;
+  color: var(--ss-text-strong);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+}
+
+.lt-sub {
+  overflow: hidden;
+  color: var(--ss-text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+}
+
+.lt-mono {
+  font-family: var(--ss-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.lt-ver {
+  color: var(--ss-text);
+  font-size: 11.5px;
+}
+
+.lt-links {
+  display: flex;
+  gap: 4px;
+}
+
+.lt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--ss-line);
+  border-radius: var(--ss-radius-sm);
+  color: var(--ss-text);
+  font-family: var(--ss-mono);
+  font-size: 11px;
+}
+
+.lt-pill[data-zero] {
+  border-style: dashed;
+  color: var(--ss-text-faint);
+}
+
+.lt .ss-badge {
+  justify-self: start;
+  font-weight: 700;
+}
+
+/* an even box keeps the 12px check on whole pixels while it moves */
+.lt .ss-badge.lt-badge-even {
+  justify-content: center;
+  width: 96px;
+}
+
+/* a fixed box never squeezes its icon */
+.lt .ss-badge svg {
+  flex: none;
+}
+
+/* placeholder lines keep the air of the text lines they stand in for */
+.lt-row--filler .lt-lines {
+  gap: 11px;
+}
+
+/* the old row's status is quieter, so the new ones lead */
+.lt .ss-badge.lt-badge--quiet {
+  background: var(--ss-raised);
+  color: var(--ss-text);
+}
+
+/* ---------- download: one track per real connection */
+
+.lt-seg {
+  display: flex;
+  gap: 2px;
+  width: 92px;
+  height: 8px;
+}
+
+.lt-seg__track {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--ss-raised);
+}
+
+.lt-seg__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--p, 0) * 100%);
+  background: #4fb3d9;
+  transition: width 0.26s linear;
+}
+
+/* ---------- the satellite: one card from search hit to plan to "in profile" */
+
+.lt-card {
+  position: absolute;
+  top: 140px;
+  left: 40px;
+  z-index: 5;
+  width: 200px;
+  padding: 14px;
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: 12px;
+  background: #1d1e21;
+  box-shadow: var(--ss-shadow-satellite);
+  white-space: nowrap;
+}
+
+.lt .ss-stage[data-layout='compact'] .lt-card {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: 100%;
+  flex: none;
+  box-shadow: none;
+}
+
+.lt-card__top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lt-card__title {
+  color: var(--ss-text-strong);
+  font-size: 13.5px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.lt-card__sub {
+  color: var(--ss-text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.lt-plan {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+}
+
+.lt-plan__label {
+  color: var(--ss-text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lt-plan__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.lt-plan__name {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  color: var(--ss-text-strong);
+  font-weight: 700;
+}
+
+.lt-plan__why {
+  color: var(--ss-text-faint);
+  font-weight: 600;
+}
+
+.lt-faint-icon {
+  color: var(--ss-icon-faint);
+}
+
+.lt-plan__ok {
+  justify-self: start;
+  margin-top: 2px;
+}
+
+.lt-card__foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.lt-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--ss-radius-md);
+  background: var(--ss-accent);
+  color: #0e0f10;
+  font-size: 12.5px;
+  font-weight: 800;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+
+.lt-btn[data-hover] {
+  background: var(--ss-accent-2);
+}
+
+.lt-btn[data-pressed] {
+  background: #7a6be8;
+}
+
+/* ---------- toast, where Lattice puts it */
+
+.lt .ss-toast.lt-toast {
+  position: absolute;
+  right: 40px;
+  bottom: 56px;
+  z-index: 6;
+  gap: 10px;
+  height: 44px;
+  padding: 0 8px 0 14px;
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: 10px;
+  background: #1d1e21;
+  color: var(--ss-text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  box-shadow: var(--ss-shadow-float);
+  /* rises from the gutter line, never from inside it */
+  --ss-toast-rise: 16px;
+}
+
+.lt .ss-stage[data-layout='compact'] .lt-toast {
+  right: 16px;
+  bottom: 16px;
+  left: 16px;
+  --ss-toast-rise: 12px;
+}
+
+.lt-ok {
+  color: var(--ss-success);
+}
+
+.lt-undo {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--ss-line);
+  border-radius: var(--ss-radius-md);
+  color: var(--ss-text-strong);
+  font-weight: 700;
+}
+
+.lt-undo[data-hover] {
+  background: var(--ss-raised);
+}

@@ -1,0 +1,56 @@
+// Typed bridge to the main process (see electron/preload.ts).
+import type { Service, Toast } from '../electron/core/service';
+import type { AppState, DownloadView, InstallPlan } from '../shared/types';
+
+type Methods =
+  | 'state' | 'gameDefs' | 'detectGames' | 'minecraftVersions' | 'addGame' | 'removeGame' | 'setActiveGame'
+  | 'createProfile' | 'updateProfile' | 'deleteProfile' | 'switchProfile' | 'compat' | 'search' | 'project' | 'versions'
+  | 'planInstall' | 'planUpdates' | 'planCollection' | 'applyFix' | 'applyPlan' | 'setEnabled' | 'dependentsOf' | 'removeMod'
+  | 'addRule' | 'removeRule' | 'setUserLink' | 'importLocal' | 'createCollection' | 'updateCollection' | 'relockCollection'
+  | 'deleteCollection' | 'exportCollection' | 'importCollectionFile' | 'importModpack' | 'createProfileForCollection'
+  | 'removeCollectionFromProfile' | 'deploy' | 'purge' | 'snapshot' | 'rollback' | 'deleteSnapshot' | 'updateSettings'
+  | 'inspectPlan' | 'fomodPrompt' | 'reinstallWithChoices' | 'pluginOrder' | 'setNexusKey' | 'clearNexusKey' | 'handleNxm'
+  | 'nexusSsoAvailable' | 'loginWithNexus';
+
+type Fn<K extends Methods> = Service[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
+export type Api = { [K in Methods]: Fn<K> };
+
+interface Bridge {
+  call(method: string, ...args: unknown[]): Promise<unknown>;
+  downloads(action: 'list' | 'pause' | 'resume' | 'cancel' | 'clear', id?: string): Promise<DownloadView[]>;
+  dialog(kind: 'folder'): Promise<string | null>;
+  dialog(kind: 'files'): Promise<string[] | null>;
+  dialog(kind: 'collection-open'): Promise<string | null>;
+  dialog(kind: 'collection-save', defaultName?: string): Promise<string | null>;
+  openExternal(url: string): Promise<void>;
+  openPath(p: string): Promise<void>;
+  setTheme(t: 'dark' | 'light'): Promise<void>;
+  on(event: 'state', cb: (s: AppState) => void): () => void;
+  on(event: 'downloads', cb: (d: DownloadView[]) => void): () => void;
+  on(event: 'toast', cb: (t: Toast) => void): () => void;
+  on(event: 'deployed', cb: (d: unknown) => void): () => void;
+  on(event: 'plan', cb: (p: InstallPlan) => void): () => void;
+}
+
+declare global {
+  interface Window {
+    lattice: Bridge;
+  }
+}
+
+/** Electron wraps errors as "Error invoking remote method 'x': Error: msg" — keep only msg. */
+export function cleanError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+}
+
+export const bridge: Bridge = window.lattice;
+
+export const api = new Proxy({} as Api, {
+  get:
+    (_t, method: string) =>
+    (...args: unknown[]) =>
+      bridge.call(method, ...args).catch((e) => {
+        throw new Error(cleanError(e));
+      }),
+});
