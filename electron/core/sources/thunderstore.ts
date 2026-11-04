@@ -107,6 +107,9 @@ export class ThunderstoreSource implements SourceAdapter {
     const scored: { p: TsPackage; s: number }[] = [];
     for (const p of idx.list) {
       if (p.is_deprecated || p.has_nsfw_content || p.versions.length === 0) continue;
+      // modpacks are packages that only depend on other packages
+      const pack = p.categories.some((c) => /modpack/i.test(c));
+      if ((q.kind === 'modpack') !== pack) continue;
       const latest = p.versions[0];
       const total = p.versions.reduce((a, v) => a + v.downloads, 0);
       let s = Math.log10(total + 10) + p.rating_score / 200;
@@ -204,6 +207,6 @@ function toProject(p: TsPackage): ModProject {
     updated: p.date_updated,
     categories: p.categories,
     url: p.package_url,
-    kind: p.categories.some((c) => /librar/i.test(c)) ? 'library' : 'mod',
+    kind: p.categories.some((c) => /modpack/i.test(c)) ? 'modpack' : p.categories.some((c) => /librar/i.test(c)) ? 'library' : 'mod',
   };
 }

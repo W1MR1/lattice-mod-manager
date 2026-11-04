@@ -24,7 +24,7 @@ let service: Service;
 
 // Only these service methods are reachable from the renderer.
 const ALLOWED = new Set<keyof Service>([
-  'exportProfile', 'backupAll', 'restoreBackup', 'curseforgeAvailable', 'modrinthAccount', 'modrinthList',
+  'exportProfile', 'backupAll', 'restoreBackup', 'curseforgeAvailable', 'curseforgeCheck', 'modrinthAccount', 'modrinthList', 'scanImports', 'importPlan',
   'state', 'gameDefs', 'detectGames', 'minecraftVersions', 'addGame', 'removeGame', 'setActiveGame',
   'createProfile', 'updateProfile', 'deleteProfile', 'switchProfile', 'compat', 'search', 'project', 'versions',
   'planInstall', 'planUpdates', 'planCollection', 'applyFix', 'applyPlan', 'setEnabled', 'dependentsOf', 'removeMod',

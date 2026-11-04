@@ -184,7 +184,9 @@ export async function stageVersion(def: GameDef, version: ModVersion, downloaded
     const name = version.files[i]?.filename ?? path.basename(file);
     const st = await fs.stat(file);
     if (st.isDirectory()) {
-      await fs.cp(file, dir, { recursive: true });
+      // a folder from another manager may sit under a subfolder of the deploy root (targetPath)
+      const sub = version.files[i]?.targetPath ? safeRel(version.files[i].targetPath!) : null;
+      await fs.cp(file, sub ? path.join(dir, sub) : dir, { recursive: true });
       fileCount += (await walk(file)).length;
       continue;
     }

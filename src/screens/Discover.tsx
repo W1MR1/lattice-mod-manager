@@ -22,7 +22,8 @@ export function Discover() {
   const openPlan = useUI((s) => s.openPlan);
   const run = useUI((s) => s.run);
   const go = useUI((s) => s.go);
-  const sources = (def?.sources ?? []).filter((s): s is Exclude<SourceId, 'local'> => s !== 'local');
+  const [cfGame, setCfGame] = useState(false);
+  const sources = (def?.sources ?? []).filter((s): s is Exclude<SourceId, 'local'> => s !== 'local' && (s !== 'curseforge' || def?.id === 'minecraft' || cfGame));
   const [source, setSource] = useState<Exclude<SourceId, 'local'>>(sources[0] ?? 'modrinth');
   const [text, setText] = useState(() => {
     const handed = useUI.getState().discoverText;
@@ -43,14 +44,21 @@ export function Discover() {
   const [account, setAccount] = useState<ModrinthAccount | null>(null);
   const seq = useRef(0);
   const hasAccount = !!(settings?.modrinthUser || settings?.modrinthToken);
-  const kinds = source === 'curseforge' ? KINDS.filter(([k]) => k !== 'modpack') : KINDS;
+  // what each source can show: Nexus and Thunderstore have mods and modpacks (Nexus Collections, Thunderstore modpacks)
+  const kinds = source === 'curseforge' ? KINDS.filter(([k]) => k !== 'modpack') : source === 'nexus' || source === 'thunderstore' ? KINDS.filter(([k]) => k === 'mod' || k === 'modpack') : KINDS;
+  const typed = source !== 'github' && source !== 'gamebanana';
 
   useEffect(() => {
     void api
       .curseforgeAvailable()
       .then(setCfReady)
       .catch(() => setCfReady(false));
-  }, [settings?.curseforgeKey]);
+    if (def && def.id !== 'minecraft')
+      void api
+        .curseforgeAvailable(def.id)
+        .then(setCfGame)
+        .catch(() => setCfGame(false));
+  }, [settings?.curseforgeKey, def?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setAccount(null);
@@ -65,6 +73,10 @@ export function Discover() {
   useEffect(() => {
     if (!sources.includes(source) && sources[0]) setSource(sources[0]);
   }, [def?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!kinds.some(([k]) => k === kind)) setKind('mod');
+  }, [source]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = async (offset: number) => {
     if (!profile) return;
@@ -87,7 +99,6 @@ export function Discover() {
         setTotal(found.length);
         return;
       }
-      const typed = source === 'modrinth' || source === 'curseforge';
       const r = await api.search({ source, text, ctx: profile.context, kind: typed ? kind : undefined, offset, limit: 30, compatibleOnly: compatible });
       if (my !== seq.current) return;
       setHits((h) => (offset ? [...h, ...r.hits] : r.hits));
@@ -153,7 +164,7 @@ export function Discover() {
               ))}
             </select>
           )}
-          {(source === 'modrinth' || source === 'curseforge') && !list && (
+          {typed && !list && (
             <div className="seg" role="group" aria-label={t("Тип")}>
               {kinds.map(([k, l]) => (
                 <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>
@@ -214,7 +225,7 @@ export function Discover() {
                         <b className="ellipsis grow">{p.title}</b>
                         {installed(p) ? (
                           <StatusChip tone="ok">{t('В профиле')}</StatusChip>
-                        ) : p.kind === 'modpack' ? (
+                        ) : p.kind === 'modpack' && p.ref.source !== 'thunderstore' ? (
                           <button
                             className="btn sm"
                             onClick={(e) => {

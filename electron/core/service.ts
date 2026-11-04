@@ -30,7 +30,7 @@ import type {
   Settings,
   Snapshot,
 } from '../../shared/types';
-import type { FomodPrompt, GameDef, HealthProblem, InstallInfo } from '../../shared/types';
+import type { CollectionMod, FomodPrompt, GameDef, HealthProblem, InstallInfo } from '../../shared/types';
 import { keyOf } from '../../shared/types';
 import { defaultChoices, validateChoices, type FileState, type FomodChoices } from '../../shared/fomod';
 import { checkCompatibility, type PluginCheck, type PluginInfo } from './compat';
@@ -38,6 +38,7 @@ import { collectionClosure, fromProfile, importMrpack, parseCollection, slugId, 
 import { computeOverlaps, deploy, deployDrift, forgetStaged, ownedFiles, purge, stagedFiles, type DeployFailure, type DeployOptions } from './deployer';
 import { readJarMeta, type JarMeta } from './jarmeta';
 import { DownloadManager } from './downloader';
+import { archiveKind } from './archives';
 import { GAME_DEFS, gameDef } from './games';
 import { detectAll, inspectFolder, launcherName, samePath, systemEnv, type DetectEnv } from './detect';
 import { FomodRequired, inspectFomod, STAGED_PREFIX, safeName, stageVersion, walk } from './installer';
@@ -45,6 +46,9 @@ import { computeOrder, providerIndex } from './loadorder';
 import { PLUGIN_EXT, pluginMasters, pluginsTxtPath, restorePluginsTxt, writePluginsTxt } from './plugins';
 import { resolvePlan, type ProjectMeta } from './resolver';
 import { Sources } from './sources';
+import { CurseForgeSource } from './sources/curseforge';
+import { scanManagers, vortexDeployedFiles, type ImportSource } from './importers';
+import { mapPool } from './http';
 import { parseNexusUrl, parseNxm, type NxmLink } from './sources/nexus';
 import { Store } from './store';
 import { collectOrphans, recomputeLinks } from './links';
@@ -551,9 +555,16 @@ export class Service extends EventEmitter {
       const nxm = this.nxmKeys.get(`${nexus.domain}/${nexus.modId}/${nexus.fileId}`);
       const url = await this.sources.nexus.downloadLink(nexus.domain, nexus.modId, nexus.fileId, nxm);
       if (!this.isTrusted(url)) throw new Error(t('Nexus вернул ссылку на неизвестный хост: {0}', new URL(url).hostname));
+      // collections sometimes name a file by its storage hash: the link carries the real name and extension
+      if (!archiveKind(f.filename)) {
+        const real = decodeURIComponent(new URL(url).pathname.split('/').pop() ?? '');
+        if (archiveKind(real)) f.filename = real;
+      }
+      const ndest = this.cachePath(f);
+      if ((await fs.stat(ndest).catch(() => null))?.isFile() && !(f.hashes.sha1 || f.hashes.sha256 || f.hashes.sha512 || f.hashes.md5)) return ndest;
       // Free accounts are limited by Nexus per connection; one connection keeps within their terms.
       const premium = this.settings.nexusUser?.premium === true;
-      return this.downloads.enqueue({ url, dest, title, size: f.size, hashes: f.hashes, maxConnections: premium ? undefined : 1, gameId }).done;
+      return this.downloads.enqueue({ url, dest: ndest, title, size: f.size, hashes: f.hashes, maxConnections: premium ? undefined : 1, gameId }).done;
     }
     if (!this.isTrusted(f.url)) {
       let host = f.url;
@@ -565,6 +576,25 @@ export class Service extends EventEmitter {
       throw new Error(t('источник {0} не в списке доверенных (Настройки → Источники)', host));
     }
     return this.downloads.enqueue({ url: f.url, dest, title, size: f.size, hashes: f.hashes, gameId }).done;
+  }
+
+  /**
+   * A locked version that came without files (a hand-made or partial collection):
+   * the files come from its source — the same file id, else the same version
+   * number, else the newest main file. Returns the version unchanged otherwise.
+   */
+  private async ensureFiles(v: ModVersion, ctx: GameContext): Promise<ModVersion> {
+    if (v.files.length || v.ref.source === 'local') return v;
+    const remote = await this.sources
+      .provider(ctx)
+      .versions(v.ref, ctx)
+      .catch(() => [] as ModVersion[]);
+    const withFiles = remote.filter((x) => x.files.length);
+    const match =
+      withFiles.find((x) => x.versionId === v.versionId) ??
+      withFiles.find((x) => x.version === v.version) ??
+      [...withFiles].filter((x) => !x.optional).sort((a, b) => Date.parse(b.published) - Date.parse(a.published))[0];
+    return match ? { ...v, versionId: match.versionId, files: match.files, deps: v.deps.length ? v.deps : match.deps } : v;
   }
 
   private primaryFiles(v: ModVersion): ModFile[] {
@@ -586,6 +616,7 @@ export class Service extends EventEmitter {
     const prompts: FomodPrompt[] = [];
     await Promise.all(
       [...plan.install, ...plan.update].map(async (it) => {
+        it.version = await this.ensureFiles(it.version, profile.context);
         const files = this.primaryFiles(it.version);
         if (files.length !== 1 || files[0].url.startsWith(STAGED_PREFIX)) return;
         const file = await this.fetchFile(files[0], it.title, profile.gameId);
@@ -616,8 +647,9 @@ export class Service extends EventEmitter {
     await Promise.all(
       items.map(async (it) => {
         try {
+          it.version = await this.ensureFiles(it.version, profile.context);
           const files = this.primaryFiles(it.version);
-          if (files.length === 0) throw new Error(t('у версии нет файлов'));
+          if (files.length === 0) throw new Error(t('у версии нет файлов, а в источнике она не нашлась'));
           const paths = await Promise.all(files.map((f) => this.fetchFile(f, it.title, game.id)));
           const root = this.dir('staging', game.id);
           const version = { ...it.version, files };
@@ -682,7 +714,10 @@ export class Service extends EventEmitter {
       items.length ? t('{0} — готово, изменено модов: {1}', plan.label, items.length) : t('{0} — готово', plan.label),
       before ? { label: t('Откатить'), snapshotId: before.id } : undefined,
     );
-    await this.deploy(profile.id).catch((e) => this.toast('err', t('Развёртывание: {0}', (e as Error).message)));
+    await this.redeploy(profile.id);
+    if (game.activeProfileId !== profile.id && items.length) {
+      this.toast('info', t('Профиль «{0}» готов. Переключитесь на него в шапке, когда будете готовы: Lattice разложит его моды в игру.', profile.name));
+    }
     return { applied: items.length, warnings };
   }
 
@@ -903,9 +938,16 @@ export class Service extends EventEmitter {
     this.toast('ok', t('Коллекция сохранена: {0}', path.basename(file)));
   }
 
-  /** Whether CurseForge can be used: a key came with the build or the user gave one. */
-  curseforgeAvailable(): boolean {
-    return this.sources.curseforge.available();
+  /** Whether CurseForge can be used for a game: there is a key and CurseForge has the game. */
+  async curseforgeAvailable(defId?: string): Promise<boolean> {
+    if (!this.sources.curseforge.available()) return false;
+    if (!defId || defId === 'minecraft') return true;
+    return (await this.sources.curseforge.gameIdFor(defId).catch(() => null)) !== null;
+  }
+
+  /** Tries a CurseForge key before it is saved: how many games it opens. */
+  async curseforgeCheck(key: string): Promise<{ games: number }> {
+    return { games: await new CurseForgeSource(() => key.trim()).check() };
   }
 
   /** The user's Modrinth collections (and follows, with a token). */
@@ -915,6 +957,132 @@ export class Service extends EventEmitter {
 
   modrinthList(list: { collection: string } | { follows: true }) {
     return this.sources.modrinth.listProjects(list);
+  }
+
+  // ---------- moving over from other managers
+
+  private importScan = new Map<string, ImportSource>();
+
+  /** Vortex, Mod Organizer 2 and r2modman setups of this game found on the computer. */
+  async scanImports(gameId: string) {
+    const game = this.game(gameId);
+    const copies = await this.detectGames().catch(() => [] as { defId: string; path: string }[]);
+    const dirs = [...this.store.state.games.map((g) => ({ defId: g.defId, path: g.installPath })), ...copies.map((c) => ({ defId: c.defId, path: c.path }))];
+    const all = await scanManagers(this.env, dirs);
+    for (const s of all) this.importScan.set(s.id, s);
+    return all
+      .filter((s) => s.defId === game.defId)
+      .map((s) => ({
+        id: s.id,
+        manager: s.manager,
+        path: s.path,
+        deployedFiles: s.deployedFiles ?? 0,
+        profiles: s.profiles.map((p) => ({
+          id: p.id,
+          name: p.name,
+          count: p.mods.filter((m) => m.enabled).length,
+          known: p.mods.filter((m) => m.enabled && (m.nexus || m.thunderstore)).length,
+          skipped: p.mods.filter((m) => m.enabled && m.problem).map((m) => ({ name: m.name, problem: m.problem! })),
+        })),
+      }));
+  }
+
+  /**
+   * Takes one profile of another manager into a new Lattice profile. Vortex and
+   * MO2 mods come from their folders (nothing is downloaded again) and are
+   * matched with Nexus; r2modman mods come from Thunderstore in the same
+   * versions. The result is a plan: missing dependencies and conflicts show up
+   * before anything is installed.
+   */
+  async importPlan(gameId: string, sourceId: string, profileId: string, name: string): Promise<InstallPlan> {
+    const game = this.game(gameId);
+    const def = this.defOf(game);
+    const src = this.importScan.get(sourceId);
+    const prof = src?.profiles.find((p) => p.id === profileId);
+    if (!src || !prof) throw new Error(t('Список модов устарел — откройте перенос заново'));
+    const managerName = { vortex: 'Vortex', mo2: 'Mod Organizer 2', r2modman: 'r2modman' }[src.manager];
+    const target = this.createProfile(game.id, name || `${managerName} · ${prof.name}`);
+    const label = t('Перенос из {0}: «{1}»', managerName, target.name);
+
+    if (src.manager === 'r2modman') {
+      const requests: PlanRequest[] = prof.mods
+        .filter((m) => m.enabled && m.thunderstore)
+        .map((m) => ({ ref: { source: 'thunderstore', projectId: m.thunderstore!.fullName }, versionId: `${m.thunderstore!.fullName}-${m.thunderstore!.version}`, title: m.name }));
+      return this.planInstall(target.id, requests, { label });
+    }
+
+    const domain = def.nexusDomain;
+    const usable = prof.mods.filter((m) => m.dir && !m.problem);
+    const mods: CollectionMod[] = [];
+    const keyByName = new Map<string, string>();
+    await mapPool(usable, 6, async (m) => {
+      const file: ModFile = { url: pathToFileURL(m.dir!).href, filename: path.basename(m.dir!), hashes: {}, primary: true, targetPath: m.prefix || undefined };
+      let version: ModVersion | undefined;
+      if (m.nexus && domain) {
+        const vs = await this.sources.nexus.versions({ source: 'nexus', projectId: `${domain}/${m.nexus.modId}` }).catch(() => [] as ModVersion[]);
+        const stem = (f?: string) => (f ?? '').replace(/\.(zip|7z|rar)$/i, '').toLowerCase();
+        const uploaded = m.nexus.uploaded ? new Date(m.nexus.uploaded * 1000).toISOString() : '';
+        version =
+          vs.find((v) => m.nexus!.fileId && v.versionId === String(m.nexus!.fileId)) ??
+          vs.find((v) => uploaded && v.published === uploaded) ??
+          vs.find((v) => m.folder && stem(v.files[0]?.filename) === m.folder.replace(/\.\d+$/, '').toLowerCase()) ??
+          vs.find((v) => m.nexus!.version && v.version === m.nexus!.version);
+      }
+      if (version) {
+        mods.push({ ref: version.ref, title: m.name, versionId: version.versionId, version: version.version, optional: !m.enabled, files: [file], deps: version.deps, gameVersions: [], loaders: [] });
+        keyByName.set(m.folder ?? m.name, keyOf(version.ref));
+        return;
+      }
+      // a mod no source knows: kept as a local mod
+      const ref: ModRef = { source: 'local', projectId: slugId(m.name, `${src.id}/${m.dir}`) };
+      const v: ModVersion = { ref, versionId: createHash('sha1').update(m.dir!).digest('hex').slice(0, 12), version: m.nexus?.version ?? '—', gameVersions: [], loaders: [], published: new Date().toISOString(), files: [file], deps: [] };
+      this.store.state.local[keyOf(ref)] = { title: m.name, versions: [v] };
+      mods.push({ ref, title: m.name, versionId: v.versionId, version: v.version, optional: !m.enabled, files: [file], deps: [], gameVersions: [], loaders: [] });
+      keyByName.set(m.folder ?? m.name, keyOf(ref));
+    });
+
+    // who wins a file several mods have: as the other manager had it (Vortex) or by priority (MO2)
+    const owners = new Map<string, string[]>();
+    for (const m of usable) {
+      const k = keyByName.get(m.folder ?? m.name);
+      if (!k) continue;
+      for (const rel of await walk(m.dir!).catch(() => [] as string[])) {
+        const at = path.posix.join(m.prefix ?? '', rel).toLowerCase();
+        owners.set(at, [...(owners.get(at) ?? []), k]);
+      }
+    }
+    const prio = new Map(usable.map((m) => [keyByName.get(m.folder ?? m.name), m.priority]));
+    const byFolder = new Map(usable.map((m) => [m.folder ?? m.name, keyByName.get(m.folder ?? m.name)]));
+    const rules: OrderRule[] = [];
+    const seen = new Set<string>();
+    for (const [rel, keys] of owners) {
+      if (keys.length < 2) continue;
+      const won = prof.winners?.[rel] ? byFolder.get(prof.winners[rel]) : undefined;
+      const winner = won && keys.includes(won) ? won : [...keys].sort((a, b) => (prio.get(b) ?? 0) - (prio.get(a) ?? 0))[0];
+      for (const other of keys) {
+        if (other === winner || seen.has(`${winner}|${other}`)) continue;
+        seen.add(`${winner}|${other}`);
+        rules.push({ subject: winner, kind: 'after', other });
+      }
+    }
+
+    const c: Collection = {
+      schema: 'lattice.collection/1',
+      id: slugId(`${managerName} ${prof.name}`, `${src.id}/${prof.id}/${Date.now()}`),
+      name: `${managerName} · ${target.name}`,
+      version: '1.0.0',
+      author: '',
+      description: t('Перенесено из {0}: {1}', managerName, src.path),
+      game: { defId: def.id },
+      requires: [],
+      conflicts: [],
+      mods,
+      rules,
+      createdAt: new Date().toISOString(),
+      importedFrom: src.path,
+    };
+    this.upsertCollection(c);
+    return this.planCollection(target.id, c.id);
   }
 
   /** The profile as a collection file: exact versions, hashes, rules and installer options. */
@@ -991,6 +1159,7 @@ export class Service extends EventEmitter {
 
   /** Downloads a Modrinth modpack and turns it into a collection. */
   async importModpack(ref: ModRef): Promise<Collection> {
+    if (ref.source === 'nexus' && ref.projectId.startsWith('collection/')) return this.importNexusCollection(ref.projectId.slice('collection/'.length));
     const versions = await this.sources.modrinth.versions(ref, { gameDefId: 'minecraft' });
     const v = versions.sort((a, b) => Date.parse(b.published) - Date.parse(a.published))[0];
     if (!v) throw new Error(t('У сборки нет версий'));
@@ -998,6 +1167,57 @@ export class Service extends EventEmitter {
     const file = await this.fetchFile(f, t('Сборка {0}', v.name ?? v.version), this.store.state.activeGameId);
     const c = await importMrpack(file, this.sources.modrinth, this.dir('staging', '_shared'));
     this.upsertCollection(c);
+    return c;
+  }
+
+  /**
+   * A Nexus collection as a Lattice collection: the exact files of its latest
+   * revision, with each mod's Nexus requirements as links, so the plan shows
+   * what is missing before anything is installed.
+   */
+  async importNexusCollection(slug: string): Promise<Collection> {
+    const content = await this.sources.nexus.collectionMods(slug);
+    const def = GAME_DEFS.find((d) => d.nexusDomain === content.domain);
+    if (!def) throw new Error(t('Сборка для игры «{0}» не поддерживается', content.domain));
+    const reqs = await this.sources.nexus.requirements(content.domain, content.files.map((f) => f.modId)).catch(() => new Map<number, DepDecl[]>());
+    // one entry per mod: its main file wins over optional extras of the same mod
+    const byMod = new Map<number, (typeof content.files)[number]>();
+    for (const f of content.files) {
+      const cur = byMod.get(f.modId);
+      if (!cur || (cur.optional && !f.optional)) byMod.set(f.modId, f);
+    }
+    const mods: CollectionMod[] = [...byMod.values()].map((f) => ({
+      ref: { source: 'nexus', projectId: `${content.domain}/${f.modId}` },
+      title: f.modName,
+      versionId: String(f.fileId),
+      version: f.version,
+      optional: f.optional,
+      files: [{ url: `nexus://${content.domain}/${f.modId}/${f.fileId}`, filename: f.uri, size: f.size, hashes: {}, primary: true }],
+      deps: reqs.get(f.modId) ?? [],
+      gameVersions: [],
+      loaders: [],
+    }));
+    const c: Collection = {
+      schema: 'lattice.collection/1',
+      id: slugId(content.name, `nexus:${slug}`),
+      name: content.name,
+      version: String(content.revision),
+      author: content.author,
+      description: content.summary,
+      game: { defId: def.id },
+      requires: [],
+      conflicts: [],
+      mods,
+      rules: [],
+      createdAt: new Date().toISOString(),
+      importedFrom: `https://www.nexusmods.com/games/${content.domain}/collections/${slug}`,
+    };
+    this.upsertCollection(c);
+    const extra = content.files.length - mods.length;
+    if (extra > 0) this.toast('info', t('«{0}»: {1} дополнительных файлов тех же модов не вошли — Lattice ставит по одному файлу на мод.', c.name, extra));
+    if (!this.settings.nexusUser?.premium) {
+      this.toast('info', t('В сборке «{0}» {1} файлов с Nexus. Без Premium Nexus отдаёт каждый файл только через кнопку на сайте, поэтому большие сборки удобнее ставить с Premium.', c.name, mods.length));
+    }
     return c;
   }
 
@@ -1051,8 +1271,12 @@ export class Service extends EventEmitter {
     if (game.activeProfileId !== profileId) throw new Error(t('Профиль не активен'));
     const st = await fs.stat(game.installPath).catch(() => null);
     if (!st?.isDirectory()) throw new Error(t('Папка игры не найдена: {0}', game.installPath));
-    const res = await deploy(this.deployOptions(p, game));
     const def = this.defOf(game);
+    if (def.kind !== 'minecraft' && Object.values(p.mods).some((m) => m.enabled)) {
+      const vortex = await vortexDeployedFiles(game.installPath, def).catch(() => 0);
+      if (vortex > 0) throw new Error(t('В папке игры лежат моды, развёрнутые Vortex ({0} файлов). Сначала уберите их в Vortex (кнопка Purge), затем примените профиль Lattice.', vortex));
+    }
+    const res = await deploy(this.deployOptions(p, game));
     if (def.pluginsTxt) {
       const plugins = (await this.pluginOrder(profileId)).map((x) => x.name);
       await writePluginsTxt(pluginsTxtPath(this.pluginsFolder(game, def)), this.dir('deploy', game.id), plugins);

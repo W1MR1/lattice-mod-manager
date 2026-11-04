@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Ban, FileDown, Library, Link2, Lock, Pencil, Plus, Trash2, Upload } from 'lucide-react';
+import { ArrowRightLeft, Ban, FileDown, Library, Link2, Lock, Pencil, Plus, Trash2, Upload } from 'lucide-react';
 import type { Collection } from '../../shared/types';
 import { api, bridge } from '../api';
 import { ago, LOADER_LABEL, plural } from '../format';
 import { useActive, useUI } from '../store';
 import { Empty, StatusChip } from '../components/ui';
 import { CollectionSheet } from '../sheets/CollectionSheet';
+import { ImportSheet } from '../sheets/ImportSheet';
 import { t } from '../../shared/i18n';
 
 function bump(v: string) {
@@ -18,6 +19,7 @@ export function Collections() {
   const run = useUI((s) => s.run);
   const openPlan = useUI((s) => s.openPlan);
   const [create, setCreate] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [edit, setEdit] = useState<Collection | null>(null);
   if (!state || !profile || !game || !def) return null;
 
@@ -41,10 +43,12 @@ export function Collections() {
     <div className="content">
       <div className="screen">
         <div className="toolbar">
-          <span className="muted">
+          <span className="muted" style={{ flex: '1 1 300px', minWidth: 0 }}>
             {t('Коллекция — это замок на сборку: точные версии, хэши файлов, правила порядка и связи с другими коллекциями.')}
           </span>
-          <span className="grow" />
+          <button className="btn" onClick={() => setMoving(true)} title={t('Vortex, Mod Organizer 2, r2modman')}>
+            <ArrowRightLeft size={15} /> {t('Из другого менеджера')}
+          </button>
           <button className="btn" onClick={importFile}>
             <Upload size={15} /> {t('Импорт .json / .mrpack')}
           </button>
@@ -175,6 +179,7 @@ export function Collections() {
         </div>
       </div>
       {create && <CollectionSheet profileId={profile.id} onClose={() => setCreate(false)} />}
+      {moving && <ImportSheet onClose={() => setMoving(false)} />}
       {edit && <CollectionSheet edit={edit} onClose={() => setEdit(null)} />}
     </div>
   );

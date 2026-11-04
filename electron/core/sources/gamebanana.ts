@@ -61,7 +61,7 @@ export function gbToProject(r: GbRecord): ModProject {
   return {
     ref: { source: 'gamebanana', projectId: String(r._idRow) },
     title: r._sName,
-    summary: category ?? '',
+    summary: '',
     author: r._aSubmitter?._sName ?? '',
     iconUrl: image(r),
     downloads: r._nDownloadCount ?? 0,

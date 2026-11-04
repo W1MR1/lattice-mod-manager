@@ -105,6 +105,7 @@ export class NexusSource implements SourceAdapter {
   }
 
   async search(q: SearchQuery): Promise<SearchResult> {
+    if (q.kind === 'modpack') return this.collections(q);
     const domain = this.domain(q.ctx);
     const filter: Record<string, unknown> = { gameDomainName: [{ value: domain }], adultContent: [{ value: false }] };
     if (q.text.trim()) filter.name = [{ value: q.text.trim(), op: 'WILDCARD' }];
@@ -136,6 +137,81 @@ export class NexusSource implements SourceAdapter {
       { ids: [{ gameDomain: domain, modId }] },
     );
     return data.legacyModsByDomain.nodes[0] ?? null;
+  }
+
+  /** Nexus Collections of the game: curated mod lists, offered as modpacks. */
+  async collections(q: SearchQuery): Promise<SearchResult> {
+    const domain = this.domain(q.ctx);
+    const filter: Record<string, unknown> = { gameDomain: [{ value: domain, op: 'EQUALS' }], adultContent: [{ value: false, op: 'EQUALS' }] };
+    if (q.text.trim()) filter.name = [{ value: q.text.trim(), op: 'WILDCARD' }];
+    const data = await this.gql<{ collectionsV2: { totalCount: number; nodes: GqlCollection[] } }>(
+      `query($f: CollectionsSearchFilter, $s: [CollectionsSearchSort!], $offset: Int, $count: Int) {
+        collectionsV2(filter: $f, sort: $s, offset: $offset, count: $count) {
+          totalCount nodes { slug name summary endorsements totalDownloads updatedAt tileImage { url } user { name } latestPublishedRevision { revisionNumber modCount totalSize } }
+        }
+      }`,
+      { f: filter, s: [{ endorsements: { direction: 'DESC' } }], offset: q.offset ?? 0, count: q.limit ?? 30 },
+    );
+    return { total: data.collectionsV2.totalCount, offset: q.offset ?? 0, hits: data.collectionsV2.nodes.map((c) => collectionToProject(domain, c)) };
+  }
+
+  /** The mods of a collection's latest published revision. */
+  async collectionMods(slug: string): Promise<NexusCollectionContent> {
+    const data = await this.gql<{ collection: GqlCollection & { game: { domainName: string } }; collectionRevision: { revisionNumber: number; gameVersions?: { reference: string }[]; modFiles: GqlCollectionFile[] } }>(
+      `query($slug: String!) {
+        collection(slug: $slug, viewAdultContent: true) { slug name summary user { name } game { domainName } }
+        collectionRevision(slug: $slug, viewAdultContent: true) {
+          revisionNumber gameVersions { reference }
+          modFiles { fileId optional file { fileId modId name version sizeInBytes uri mod { modId name author } } }
+        }
+      }`,
+      { slug },
+    );
+    return {
+      slug,
+      name: data.collection.name,
+      summary: data.collection.summary ?? '',
+      author: data.collection.user?.name ?? '',
+      domain: data.collection.game.domainName,
+      revision: data.collectionRevision.revisionNumber,
+      gameVersion: data.collectionRevision.gameVersions?.[0]?.reference,
+      files: data.collectionRevision.modFiles
+        .filter((m) => m.file)
+        .map((m) => ({
+          modId: m.file.modId,
+          fileId: m.fileId,
+          version: m.file.version,
+          fileName: m.file.name,
+          modName: m.file.mod?.name ?? m.file.name,
+          author: m.file.mod?.author,
+          uri: m.file.uri,
+          size: Number(m.file.sizeInBytes) || undefined,
+          optional: !!m.optional,
+        })),
+    };
+  }
+
+  /** Requirements of many mods in few requests (50 per request). */
+  async requirements(domain: string, modIds: number[]): Promise<Map<number, DepDecl[]>> {
+    const out = new Map<number, DepDecl[]>();
+    const ids = [...new Set(modIds)];
+    for (let i = 0; i < ids.length; i += 50) {
+      const data = await this.gql<{ legacyModsByDomain: { nodes: GqlMod[] } }>(
+        `query($ids: [CompositeDomainWithIdInput!]!) {
+          legacyModsByDomain(ids: $ids) { nodes { modId gameId name modRequirements { nexusRequirements { nodes { modId gameId modName externalRequirement } } } } }
+        }`,
+        { ids: ids.slice(i, i + 50).map((modId) => ({ gameDomain: domain, modId })) },
+      );
+      for (const m of data.legacyModsByDomain.nodes) {
+        out.set(
+          m.modId,
+          (m.modRequirements?.nexusRequirements.nodes ?? [])
+            .filter((r) => !r.externalRequirement && String(r.gameId) === String(m.gameId) && r.modId)
+            .map((r) => ({ ref: { source: 'nexus' as const, projectId: `${domain}/${r.modId}` }, kind: 'requires' as const, name: r.modName })),
+        );
+      }
+    }
+    return out;
   }
 
   async versions(ref: ModRef): Promise<ModVersion[]> {
@@ -214,6 +290,51 @@ export class NexusSource implements SourceAdapter {
     const u = (await res.json()) as { name: string; is_premium: boolean };
     return { name: u.name, premium: !!u.is_premium };
   }
+}
+
+interface GqlCollection {
+  slug: string;
+  name: string;
+  summary?: string;
+  endorsements?: number;
+  totalDownloads?: number;
+  updatedAt?: string;
+  tileImage?: { url: string } | null;
+  user?: { name: string };
+  latestPublishedRevision?: { revisionNumber: number; modCount: number; totalSize: string } | null;
+}
+
+interface GqlCollectionFile {
+  fileId: number;
+  optional: boolean;
+  file: { fileId: number; modId: number; name: string; version: string; sizeInBytes?: string; uri: string; mod?: { modId: number; name: string; author?: string } };
+}
+
+export interface NexusCollectionContent {
+  slug: string;
+  name: string;
+  summary: string;
+  author: string;
+  domain: string;
+  revision: number;
+  gameVersion?: string;
+  files: { modId: number; fileId: number; version: string; fileName: string; modName: string; author?: string; uri: string; size?: number; optional: boolean }[];
+}
+
+function collectionToProject(domain: string, c: GqlCollection): ModProject {
+  const rev = c.latestPublishedRevision;
+  return {
+    ref: { source: 'nexus', projectId: `collection/${c.slug}` },
+    title: c.name,
+    summary: [rev ? t('{0} модов', rev.modCount) : '', c.summary ?? ''].filter(Boolean).join(' · '),
+    author: c.user?.name ?? '',
+    iconUrl: c.tileImage?.url,
+    downloads: c.totalDownloads ?? 0,
+    updated: c.updatedAt ?? '',
+    categories: [],
+    url: `https://www.nexusmods.com/games/${domain}/collections/${c.slug}`,
+    kind: 'modpack',
+  };
 }
 
 function toProject(domain: string, m: GqlMod): ModProject {

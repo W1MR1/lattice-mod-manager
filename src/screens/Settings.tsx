@@ -132,8 +132,9 @@ function NexusSection() {
 }
 
 /** A key or token: shown only as "saved", replaced or cleared. */
-function SecretField({ label, hint, saved, placeholder, onSave }: { label: string; hint: string; saved: boolean; placeholder?: string; onSave: (v: string | undefined) => void }) {
+function SecretField({ label, hint, saved, placeholder, onSave }: { label: string; hint: string; saved: boolean; placeholder?: string; onSave: (v: string | undefined) => void | Promise<unknown> }) {
   const [v, setV] = useState('');
+  const [busy, setBusy] = useState(false);
   return (
     <div className="field">
       <div className="grow">
@@ -143,13 +144,20 @@ function SecretField({ label, hint, saved, placeholder, onSave }: { label: strin
       <input className="input mono" type="password" placeholder={saved ? t('•••••• сохранён') : (placeholder ?? '')} value={v} onChange={(e) => setV(e.target.value)} style={{ width: 200 }} aria-label={label} />
       <button
         className="btn sm"
-        disabled={!v && !saved}
-        onClick={() => {
-          onSave(v.trim() || undefined);
-          setV('');
+        disabled={(!v && !saved) || busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onSave(v.trim() || undefined);
+            setV('');
+          } catch {
+            /* the reason is already shown; the text stays for correcting */
+          } finally {
+            setBusy(false);
+          }
         }}
       >
-        {v ? t('Сохранить') : t('Очистить')}
+        {busy && <Spinner />} {v ? t('Сохранить') : t('Очистить')}
       </button>
     </div>
   );
@@ -324,7 +332,14 @@ export function Settings() {
                 label={t('Ключ CurseForge')}
                 hint={t('CurseForge открывает поиск и скачивание только по ключу API, который выдаёт сам (console.curseforge.com). Аккаунтов для сторонних программ у CurseForge нет. Хранится только на этом компьютере.')}
                 saved={!!s.curseforgeKey}
-                onSave={(v) => set({ curseforgeKey: v })}
+                onSave={async (v) => {
+                  if (!v) return set({ curseforgeKey: undefined });
+                  // the key is tried first: a wrong one is not saved
+                  const r = await run(() => api.curseforgeCheck(v));
+                  if (!r) throw new Error('rejected');
+                  await set({ curseforgeKey: v });
+                  useUI.getState().toast('ok', t('CurseForge принял ключ: доступно игр — {0}', r.games));
+                }}
               />
               <div className="field">
                 <div className="grow">

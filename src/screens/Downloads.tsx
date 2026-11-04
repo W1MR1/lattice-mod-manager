@@ -36,8 +36,7 @@ export function Downloads() {
     <div className="content">
       <div className="screen">
         <div className="toolbar">
-          <span className="muted">{t('Своих ограничений скорости нет. Файл делится на диапазоны и качается параллельными потоками; освободившийся поток забирает половину самого большого остатка.')}</span>
-          <span className="grow" />
+          <span className="muted" style={{ flex: '1 1 320px', minWidth: 0 }}>{t('Своих ограничений скорости нет. Файл делится на диапазоны и качается параллельными потоками; освободившийся поток забирает половину самого большого остатка.')}</span>
           {game && (
             <div className="seg" role="group" aria-label={t('Какие загрузки показывать')}>
               <button aria-pressed={scope === 'game'} onClick={() => setScope('game')}>

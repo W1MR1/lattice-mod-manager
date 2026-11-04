@@ -151,11 +151,24 @@ Modrinth, Nexus на Nexus. Если зависимость пришла из д
 которые ставят разные версии одного мода, решатель сведёт к одной или покажет
 конфликт до установки.
 
+**Как перенести моды из Vortex, Mod Organizer 2 или r2modman?** Коллекции →
+«Из другого менеджера». Lattice находит папку модов Vortex (по
+`vortex.deployment.json` в папке игры), экземпляры MO2 и профили r2modman /
+Thunderstore Mod Manager, и вы выбираете, какой профиль перенести. Файлы Vortex
+и MO2 копируются из их папок без повторного скачивания и сверяются с Nexus:
+Vortex хранит в имени папки номер мода и время загрузки файла, MO2 — номера в
+`meta.ini`. Моды r2modman ставятся с Thunderstore в тех же версиях. Результат —
+план в новом профиле: в нём видно, каких зависимостей не хватает для запуска,
+и они ставятся вместе с переносом. Перед включением профиля нажмите Purge в
+Vortex — пока Vortex держит свои файлы в игре, Lattice не кладёт свои поверх.
+
 **Где брать моды для Cyberpunk 2077, кроме Nexus?** Основа модовой сцены лежит
 на GitHub: RED4ext, Cyber Engine Tweaks, redscript, ArchiveXL, TweakXL,
 Codeware. Lattice показывает их в «Обзоре» → GitHub, когда поиск пуст, и знает,
-что ArchiveXL, TweakXL и Codeware требуют RED4ext. Большинство остальных модов
-публикуется только на Nexus.
+что ArchiveXL, TweakXL и Codeware требуют RED4ext. Ещё есть GameBanana (немного
+модов) и, если CurseForge добавит игру, CurseForge. Большинство модов — на Nexus,
+и там же больше тысячи готовых сборок (Nexus Collections): «Обзор» → Nexus →
+«Сборки». У ModDB и похожих сайтов нет API, поэтому подключить их надёжно нельзя.
 
 ## Что умеет
 
@@ -193,6 +206,13 @@ Codeware. Lattice показывает их в «Обзоре» → GitHub, ко
   спрашивает, обновляться ли. «Позже» — спросит при следующем запуске, «Не
   предлагать 7 дней» — отложит вопрос на неделю. Проверить вручную можно в
   Настройки → Обслуживание.
+- **Сборки для каждой игры:** Modrinth (Minecraft), Nexus Collections (Skyrim,
+  Fallout 4, Cyberpunk, Stardew Valley, Valheim, Lethal Company) и модпаки
+  Thunderstore (игры на BepInEx). Сборка Nexus становится коллекцией Lattice с
+  точными файлами и требованиями каждого мода — план покажет недостающее до
+  установки.
+- **Перенос из других менеджеров:** Vortex, Mod Organizer 2, r2modman и
+  Thunderstore Mod Manager, с выбором профиля и обязательной проверкой связей.
 - **Источники:** Modrinth, CurseForge (по ключу API), Thunderstore, Nexus Mods,
   GameBanana и GitHub. Аккаунт Modrinth: по имени пользователя видны ваши
   публичные коллекции, с токеном — ещё приватные и подписки, всё можно поставить
@@ -258,6 +278,7 @@ electron/core/
   launch.ts       запуск игры, загрузчик Fabric/Quilt для лаунчера Minecraft
   links.ts        связи «требует/нужен для» и поиск осиротевших зависимостей
   collections.ts  коллекции-замки, импорт .mrpack, цепочки коллекций
+  importers.ts    чтение Vortex, Mod Organizer 2 и r2modman для переноса
   sources/        Modrinth, CurseForge, Thunderstore (индекс сообщества с кэшем), Nexus Mods, GameBanana, GitHub Releases
   detect.ts       копии игр в Steam, GOG, Epic, Xbox и папки лаунчеров Minecraft
   jarmeta.ts      что объявляет jar мода: id, зависимости, конфликты, встроенные моды
@@ -294,6 +315,15 @@ docs/             RESEARCH.md — разбор Vortex, DESIGN-SYSTEM.md — то
   ни одного лаунчера Minecraft. Пути Prism и Modrinth App взяты из их
   документации, Legacy Launcher — из его документации и файлов настроек; если
   лаунчер хранит игру нестандартно, папку можно выбрать вручную.
+- **Ключ CurseForge:** нужен ключ Core API из console.curseforge.com (вида
+  `$2a$10$…`), его выдают после одобрения заявки. Токен автора с сайта
+  curseforge.com не подойдёт: CurseForge ответит 403. Lattice проверяет ключ
+  до сохранения. Список игр CurseForge Lattice берёт у самого CurseForge.
+- **Перенос из Vortex без его базы:** профили Vortex хранятся в его базе
+  данных, поэтому Lattice видит «то, что сейчас в игре» (активный профиль) и
+  «все моды из папки». Файлы для корня игры из MO2 (папка `Root`, Root Builder)
+  не переносятся. В сборках Nexus ставится по одному файлу на мод, а вопросы
+  установщиков FOMOD задаются при установке.
 - **CurseForge не проверен вживую:** без ключа API запросы невозможны; код
   проверен на ответах из документации CurseForge. Файлы, которые автор запретил
   скачивать сторонним программам, придётся скачать на сайте.

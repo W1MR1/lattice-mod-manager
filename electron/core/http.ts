@@ -15,7 +15,10 @@ export class HttpError extends Error {
 }
 
 export async function getJson<T>(url: string, headers: Record<string, string> = {}, ttl = TTL): Promise<T> {
-  const hit = cache.get(url);
+  // answers depend on the key or token sent, not only on the address
+  const cacheKey = Object.keys(headers).length ? `${url}
+${JSON.stringify(headers)}` : url;
+  const hit = cache.get(cacheKey);
   if (hit && Date.now() - hit.at < ttl) return hit.value as T;
   for (let attempt = 0; ; attempt++) {
     let res: Response;
@@ -37,7 +40,7 @@ export async function getJson<T>(url: string, headers: Record<string, string> = 
       throw new HttpError(res.status, `${res.status} ${res.statusText}${text ? `: ${text.slice(0, 160)}` : ''}`);
     }
     const value = (await res.json()) as T;
-    cache.set(url, { at: Date.now(), value });
+    cache.set(cacheKey, { at: Date.now(), value });
     return value;
   }
 }

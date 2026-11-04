@@ -9,6 +9,7 @@ import { useActive, useUI } from '../store';
 import { Empty, ModIcon, SevIcon, StatusChip, Switch, sevTone } from '../components/ui';
 import { CollectionSheet } from '../sheets/CollectionSheet';
 import { RemoveSheet } from '../sheets/RemoveSheet';
+import { ImportSheet } from '../sheets/ImportSheet';
 import { t } from '../../shared/i18n';
 
 type Filter = 'all' | 'issues' | 'off' | 'deps';
@@ -66,6 +67,7 @@ export function Mods() {
   const [collSheet, setCollSheet] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [removing, setRemoving] = useState<{ keys: string[]; all?: boolean } | null>(null);
+  const [moving, setMoving] = useState(false);
 
   const mods = useMemo(() => {
     if (!profile) return [];
@@ -182,9 +184,15 @@ export function Mods() {
             title={t("В профиле пока нет модов")}
             text={t("Найдите моды в обзоре — Lattice сам подтянет зависимости и проверит, что всё совместимо с этой версией игры.")}
             action={
-              <button className="btn primary" onClick={() => go('discover')}>
-                {t('Открыть обзор')}
-              </button>
+              <div className="row">
+                <button className="btn primary" onClick={() => go('discover')}>
+                  {t('Открыть обзор')}
+                </button>
+                <button className="btn" onClick={() => setMoving(true)}>
+                  {t('Перенести из Vortex, MO2, r2modman')}
+                </button>
+                {moving && <ImportSheet onClose={() => setMoving(false)} />}
+              </div>
             }
           />
         ) : (

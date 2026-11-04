@@ -4,7 +4,8 @@
 // files come without a link and have to be fetched from the website.
 import type { DepDecl, GameContext, ModProject, ModRef, ModVersion, ProjectKind, SearchQuery, SearchResult } from '../../../shared/types';
 import type { ProjectMeta } from '../resolver';
-import { getJson, postJson } from '../http';
+import { getJson, HttpError, postJson } from '../http';
+import { gameDef } from '../games';
 import type { SourceAdapter } from './types';
 import { t } from '../../../shared/i18n';
 
@@ -81,8 +82,25 @@ export function cfToVersion(ref: ModRef, f: CfFile): ModVersion {
   };
 }
 
+/** Slugs a game may have on CurseForge; the list itself comes from CurseForge. */
+const CF_SLUGS: Record<string, string[]> = {
+  stardewvalley: ['stardewvalley', 'stardew-valley'],
+  cyberpunk2077: ['cyberpunk2077', 'cyberpunk-2077'],
+  valheim: ['valheim'],
+  skyrimse: ['skyrim-special-edition', 'skyrimse', 'skyrim'],
+  fallout4: ['fallout-4', 'fallout4'],
+  'lethal-company': ['lethal-company', 'lethalcompany'],
+  riskofrain2: ['risk-of-rain-2', 'riskofrain2'],
+  'content-warning': ['content-warning', 'contentwarning'],
+};
+
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
 export class CurseForgeSource implements SourceAdapter {
   constructor(private key: () => string | undefined) {}
+
+  private gamesList: Promise<{ id: number; name: string; slug: string }[]> | null = null;
+  private classes = new Map<number, Promise<{ id: number; name: string; slug: string }[]>>();
 
   available() {
     return !!this.key();
@@ -94,28 +112,87 @@ export class CurseForgeSource implements SourceAdapter {
     return { 'x-api-key': key };
   }
 
+  /** CurseForge answers 403 to a key it does not accept: say what kind of key it wants. */
+  private async get<T>(url: string, ttl?: number): Promise<T> {
+    try {
+      return await getJson<T>(url, this.headers(), ttl);
+    } catch (e) {
+      if (e instanceof HttpError && (e.status === 401 || e.status === 403)) {
+        throw new Error(
+          t('CurseForge не принял ключ ({0}). Нужен ключ Core API из console.curseforge.com — он выглядит как $2a$10$… и работает после одобрения заявки CurseForge. Токен автора с сайта curseforge.com для этого не подходит.', e.status),
+        );
+      }
+      throw e;
+    }
+  }
+
+  /** Checks the key: the number of games CurseForge lists for it. */
+  async check(): Promise<number> {
+    return (await this.games()).length;
+  }
+
+  private games() {
+    this.gamesList ??= (async () => {
+      const out: { id: number; name: string; slug: string }[] = [];
+      for (let index = 0; index < 1000; index += 50) {
+        const res = await this.get<{ data: { id: number; name: string; slug: string }[] }>(`${API}/games?index=${index}&pageSize=50`, 3_600_000);
+        out.push(...res.data);
+        if (res.data.length < 50) break;
+      }
+      return out;
+    })().catch((e) => {
+      this.gamesList = null;
+      throw e;
+    });
+    return this.gamesList;
+  }
+
+  /** CurseForge game id of a Lattice game, or null when CurseForge does not have it. */
+  async gameIdFor(defId: string): Promise<number | null> {
+    if (defId === 'minecraft') return MINECRAFT;
+    const games = await this.games();
+    const slugs = CF_SLUGS[defId] ?? [];
+    const name = norm(gameDef(defId)?.name ?? '');
+    return games.find((g) => slugs.includes(g.slug) || (name && norm(g.name) === name))?.id ?? null;
+  }
+
+  private async classId(gameId: number, kind: ProjectKind): Promise<number | undefined> {
+    if (gameId === MINECRAFT) return CLASS[kind] ?? 6;
+    let p = this.classes.get(gameId);
+    if (!p) {
+      p = this.get<{ data: { id: number; name: string; slug: string }[] }>(`${API}/categories?gameId=${gameId}&classesOnly=true`, 3_600_000).then((r) => r.data);
+      this.classes.set(gameId, p);
+    }
+    const list = await p;
+    const want: Record<string, RegExp> = { mod: /^(mc-)?mods$|^mods?$/i, modpack: /modpacks?/i, resourcepack: /texture|resource/i, shader: /shader/i };
+    return list.find((c) => want[kind]?.test(c.slug) || want[kind]?.test(c.name))?.id;
+  }
+
   async search(q: SearchQuery): Promise<SearchResult> {
-    if (q.ctx.gameDefId !== 'minecraft') return { hits: [], total: 0, offset: 0 };
+    const gameId = await this.gameIdFor(q.ctx.gameDefId);
+    if (!gameId) return { hits: [], total: 0, offset: 0 };
     const offset = q.offset ?? 0;
-    const params = new URLSearchParams({ gameId: String(MINECRAFT), classId: String(CLASS[q.kind ?? 'mod'] ?? 6), sortField: '2', sortOrder: 'desc', index: String(offset), pageSize: '20' });
+    const classId = await this.classId(gameId, q.kind ?? 'mod');
+    const params = new URLSearchParams({ gameId: String(gameId), sortField: '2', sortOrder: 'desc', index: String(offset), pageSize: '20' });
+    if (classId) params.set('classId', String(classId));
     if (q.text.trim()) params.set('searchFilter', q.text.trim());
-    if (q.compatibleOnly && q.ctx.gameVersion) params.set('gameVersion', q.ctx.gameVersion);
-    if (q.compatibleOnly && q.ctx.loader && LOADER_TYPE[q.ctx.loader] && (q.kind ?? 'mod') === 'mod') params.set('modLoaderType', String(LOADER_TYPE[q.ctx.loader]));
-    const res = await getJson<{ data: CfMod[]; pagination?: { totalCount?: number } }>(`${API}/mods/search?${params}`, this.headers());
+    if (q.compatibleOnly && gameId === MINECRAFT && q.ctx.gameVersion) params.set('gameVersion', q.ctx.gameVersion);
+    if (q.compatibleOnly && gameId === MINECRAFT && q.ctx.loader && LOADER_TYPE[q.ctx.loader] && (q.kind ?? 'mod') === 'mod') params.set('modLoaderType', String(LOADER_TYPE[q.ctx.loader]));
+    const res = await this.get<{ data: CfMod[]; pagination?: { totalCount?: number } }>(`${API}/mods/search?${params}`);
     // CurseForge pages no further than 10 000 results
     return { hits: res.data.map(cfToProject), total: Math.min(res.pagination?.totalCount ?? res.data.length, 10_000), offset };
   }
 
   async versions(ref: ModRef, ctx: GameContext): Promise<ModVersion[]> {
     const params = new URLSearchParams({ pageSize: '50', index: '0' });
-    if (ctx.gameVersion) params.set('gameVersion', ctx.gameVersion);
-    if (ctx.loader && LOADER_TYPE[ctx.loader]) params.set('modLoaderType', String(LOADER_TYPE[ctx.loader]));
-    const res = await getJson<{ data: CfFile[] }>(`${API}/mods/${encodeURIComponent(ref.projectId)}/files?${params}`, this.headers());
+    if (ctx.gameDefId === 'minecraft' && ctx.gameVersion) params.set('gameVersion', ctx.gameVersion);
+    if (ctx.gameDefId === 'minecraft' && ctx.loader && LOADER_TYPE[ctx.loader]) params.set('modLoaderType', String(LOADER_TYPE[ctx.loader]));
+    const res = await this.get<{ data: CfFile[] }>(`${API}/mods/${encodeURIComponent(ref.projectId)}/files?${params}`);
     return res.data.filter((f) => f.isAvailable !== false).map((f) => cfToVersion(ref, f));
   }
 
   async project(ref: ModRef): Promise<ModProject | null> {
-    const res = await getJson<{ data: CfMod }>(`${API}/mods/${encodeURIComponent(ref.projectId)}`, this.headers());
+    const res = await this.get<{ data: CfMod }>(`${API}/mods/${encodeURIComponent(ref.projectId)}`);
     return cfToProject(res.data);
   }
 

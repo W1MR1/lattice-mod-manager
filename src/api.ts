@@ -15,7 +15,7 @@ type Methods =
   | 'inspectPlan' | 'fomodPrompt' | 'reinstallWithChoices' | 'pluginOrder' | 'setNexusKey' | 'clearNexusKey' | 'handleNxm'
   | 'nexusSsoAvailable' | 'loginWithNexus'
   | 'previewRemoval' | 'removeMods' | 'removeAllMods' | 'deleteLeftovers' | 'launchGame' | 'setGamePath' | 'healthCheck' | 'repair'
-  | 'exportProfile' | 'backupAll' | 'restoreBackup' | 'curseforgeAvailable' | 'modrinthAccount' | 'modrinthList';
+  | 'exportProfile' | 'backupAll' | 'restoreBackup' | 'curseforgeAvailable' | 'curseforgeCheck' | 'modrinthAccount' | 'modrinthList' | 'scanImports' | 'importPlan';
 
 type Fn<K extends Methods> = Service[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
 export type Api = { [K in Methods]: Fn<K> };
