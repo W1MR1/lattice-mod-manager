@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import type { DetectedGame, GameDef } from '../../shared/types';
+import { tk } from '../../shared/i18n';
 
 export const GAME_DEFS: GameDef[] = [
   {
@@ -16,7 +17,7 @@ export const GAME_DEFS: GameDef[] = [
     deployDir: '',
     loaders: ['fabric', 'quilt', 'neoforge', 'forge'],
     defaultPath: path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), '.minecraft'),
-    notes: 'Укажите папку .minecraft или папку экземпляра лаунчера. Моды попадают в mods/, ресурспаки — в resourcepacks/, шейдеры — в shaderpacks/.',
+    notes: tk('Укажите папку .minecraft или папку экземпляра лаунчера. Моды попадают в mods/, ресурспаки — в resourcepacks/, шейдеры — в shaderpacks/.'),
     github: { keywords: 'minecraft' },
   },
   {
@@ -79,7 +80,7 @@ export const GAME_DEFS: GameDef[] = [
     steamAppId: '489830',
     deployDir: 'Data',
     stripSingleRoot: true,
-    notes: 'Архивы распаковываются в Data/, установщики FOMOD проходят мастером. plugins.txt ведётся по порядку модов.',
+    notes: tk('Архивы распаковываются в Data/, установщики FOMOD проходят мастером. plugins.txt ведётся по порядку модов.'),
     nexusDomain: 'skyrimspecialedition',
     pluginsTxt: { folder: 'Skyrim Special Edition', baseMasters: ['Skyrim.esm', 'Update.esm', 'Dawnguard.esm', 'HearthFires.esm', 'Dragonborn.esm', '_ResourcePack.esl'] },
     github: { keywords: 'skyrim' },
@@ -110,7 +111,7 @@ export const GAME_DEFS: GameDef[] = [
     sources: ['nexus', 'github', 'local'],
     steamAppId: '1091500',
     deployDir: '',
-    notes: 'Архивы распаковываются в корень игры (archive/, bin/, r6/, red4ext/).',
+    notes: tk('Архивы распаковываются в корень игры (archive/, bin/, r6/, red4ext/).'),
     nexusDomain: 'cyberpunk2077',
     github: {
       keywords: 'cyberpunk',

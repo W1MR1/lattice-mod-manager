@@ -7,6 +7,7 @@ import type { GameContext, GameDef, ModProject, ModRef, ModVersion, SearchQuery,
 import type { ProjectMeta } from '../resolver';
 import { getMaybeGzipJson, mapPool } from '../http';
 import type { SourceAdapter } from './types';
+import { t } from '../../../shared/i18n';
 
 interface TsVersion {
   version_number: string;
@@ -60,7 +61,7 @@ export class ThunderstoreSource implements SourceAdapter {
 
   private community(ctx: GameContext): string {
     const c = this.gameDef(ctx.gameDefId)?.thunderstoreCommunity;
-    if (!c) throw new Error('Для этой игры нет сообщества Thunderstore');
+    if (!c) throw new Error(t('Для этой игры нет сообщества Thunderstore'));
     return c;
   }
 

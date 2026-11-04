@@ -5,6 +5,7 @@ import { api } from '../api';
 import { bytes, plural } from '../format';
 import { useUI } from '../store';
 import { Modal, Spinner, Switch } from '../components/ui';
+import { t } from '../../shared/i18n';
 
 type Preview = Awaited<ReturnType<typeof api.previewRemoval>>;
 
@@ -31,7 +32,7 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
   }, [profileId, keys, withDeps, withDependents]);
 
   const blocked = !!preview && preview.dependents.length > 0 && !withDependents;
-  const title = all ? 'Удалить все моды профиля?' : keys.length === 1 ? `Удалить «${preview?.remove[0]?.title ?? '…'}»?` : `Удалить ${plural(keys.length, 'мод', 'мода', 'модов')}?`;
+  const title = all ? t('Удалить все моды профиля?') : keys.length === 1 ? t('Удалить «{0}»?', preview?.remove[0]?.title ?? '…') : t('Удалить {0}?', plural(keys.length, 'мод', 'мода', 'модов'));
 
   const remove = async () => {
     setBusy(true);
@@ -43,7 +44,7 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
         setChecked(new Set(r.leftovers.filter((l) => l.checked).map((l) => l.path)));
         return;
       }
-      toast('ok', `Удалено: ${plural(r.removed.length, 'мод', 'мода', 'модов')}${thorough ? '. Следов не найдено' : ''}`);
+      toast('ok', t('Удалено: {0}{1}', plural(r.removed.length, 'мод', 'мода', 'модов'), thorough ? `. ${t('Следов не найдено')}` : ''));
       onClose();
     } catch (e) {
       toast('err', (e as Error).message);
@@ -57,14 +58,14 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
   if (leftovers) {
     return (
       <Modal
-        title="Следы удалённых модов"
-        sub="Моды уже убраны из профиля и из папки игры. Ниже — что от них осталось. Удалится только отмеченное."
+        title={t("Следы удалённых модов")}
+        sub={t("Моды уже убраны из профиля и из папки игры. Ниже — что от них осталось. Удалится только отмеченное.")}
         onClose={onClose}
         foot={
           <>
-            <span className="grow faint">После удаления копий откатиться к снимкам с этими модами можно будет только после повторной загрузки.</span>
+            <span className="grow faint">{t('После удаления копий откатиться к снимкам с этими модами можно будет только после повторной загрузки.')}</span>
             <button className="btn ghost" onClick={onClose}>
-              Оставить
+              {t('Оставить')}
             </button>
             <button
               className="btn danger"
@@ -73,7 +74,7 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
                 setBusy(true);
                 try {
                   const r = await api.deleteLeftovers([...checked]);
-                  toast('ok', `Удалено следов: ${r.deleted}, освобождено ${bytes(r.freed)}`);
+                  toast('ok', t('Удалено следов: {0}, освобождено {1}', r.deleted, bytes(r.freed)));
                   onClose();
                 } catch (e) {
                   toast('err', (e as Error).message);
@@ -82,7 +83,7 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
                 }
               }}
             >
-              {busy ? <Spinner /> : <Trash2 size={14} />} Удалить отмеченное ({bytes(total)})
+              {busy ? <Spinner /> : <Trash2 size={14} />} {t('Удалить отмеченное ({0})', bytes(total))}
             </button>
           </>
         }
@@ -119,16 +120,16 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
   return (
     <Modal
       title={title}
-      sub="Перед удалением Lattice сделает снимок профиля — всё можно будет вернуть."
+      sub={t("Перед удалением Lattice сделает снимок профиля — всё можно будет вернуть.")}
       onClose={onClose}
       foot={
         <>
           <span className="grow" />
           <button className="btn ghost" onClick={onClose}>
-            Отмена
+            {t('Отмена')}
           </button>
           <button className="btn danger" disabled={busy || !preview || blocked} onClick={remove}>
-            {busy ? <Spinner /> : <Trash2 size={14} />} Удалить
+            {busy ? <Spinner /> : <Trash2 size={14} />} {t('Удалить')}
           </button>
         </>
       }
@@ -144,21 +145,21 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
           )}
 
           <div className="col">
-            <span className="label">Зависимости</span>
-            <div className="seg" role="radiogroup" aria-label="Зависимости" style={{ alignSelf: 'flex-start' }}>
+            <span className="label">{t('Зависимости')}</span>
+            <div className="seg" role="radiogroup" aria-label={t("Зависимости")} style={{ alignSelf: 'flex-start' }}>
               <button role="radio" aria-pressed={withDeps} aria-checked={withDeps} onClick={() => setWithDeps(true)}>
-                Удалить и их{preview.deps.length ? ` (${preview.deps.length})` : ''}
+                {t('Удалить и их')}{preview.deps.length ? ` (${preview.deps.length})` : ''}
               </button>
               <button role="radio" aria-pressed={!withDeps} aria-checked={!withDeps} onClick={() => setWithDeps(false)}>
-                Только {keys.length === 1 ? 'этот мод' : 'выбранные'}
+                {keys.length === 1 ? t('Только этот мод') : t('Только выбранные')}
               </button>
             </div>
             <span className="faint" style={{ fontSize: 'var(--fs-sm)' }}>
               {preview.deps.length === 0
-                ? 'Лишних зависимостей не останется.'
+                ? t('Лишних зависимостей не останется.')
                 : withDeps
-                  ? `Уйдут и зависимости, которые больше никому не нужны: ${preview.deps.map((d) => `«${d.title}»`).join(', ')}.`
-                  : `Зависимости останутся и станут обычными модами профиля: ${preview.deps.map((d) => `«${d.title}»`).join(', ')}.`}
+                  ? t('Уйдут и зависимости, которые больше никому не нужны: {0}.', preview.deps.map((d) => `«${d.title}»`).join(', '))
+                  : t('Зависимости останутся и станут обычными модами профиля: {0}.', preview.deps.map((d) => `«${d.title}»`).join(', '))}
             </span>
           </div>
 
@@ -166,7 +167,7 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
             <div className="risk-note" role="note">
               <TriangleAlert size={18} aria-hidden />
               <div className="grow">
-                <b>Без {keys.length === 1 ? 'него' : 'них'} не запустятся:</b>
+                <b>{keys.length === 1 ? t('Без него не запустятся:') : t('Без них не запустятся:')}</b>
                 <div className="link-list" style={{ margin: '4px 0 8px' }}>
                   {preview.dependents.map((d) => (
                     <span className="row" key={d.key}>
@@ -175,19 +176,19 @@ export function RemoveSheet({ profileId, keys, all, onClose }: { profileId: stri
                   ))}
                 </div>
                 <label className="row">
-                  <Switch on={withDependents} onChange={setWithDependents} label="Удалить и зависящие моды" />
-                  Удалить и эти моды тоже
+                  <Switch on={withDependents} onChange={setWithDependents} label={t("Удалить и зависящие моды")} />
+                  {t('Удалить и эти моды тоже')}
                 </label>
               </div>
             </div>
           )}
 
           <label className="row">
-            <Switch on={thorough} onChange={setThorough} label="Удалить без следов" />
+            <Switch on={thorough} onChange={setThorough} label={t("Удалить без следов")} />
             <span>
-              Удалить без следов
+              {t('Удалить без следов')}
               <small className="faint" style={{ display: 'block', fontSize: 'var(--fs-sm)' }}>
-                После удаления Lattice найдёт подготовленные копии, скачанные архивы и файлы настроек этих модов в папке игры и покажет их списком.
+                {t('После удаления Lattice найдёт подготовленные копии, скачанные архивы и файлы настроек этих модов в папке игры и покажет их списком.')}
               </small>
             </span>
           </label>

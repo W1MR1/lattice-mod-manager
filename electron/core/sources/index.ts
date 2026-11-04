@@ -7,6 +7,7 @@ import { ModrinthSource } from './modrinth';
 import { NexusSource } from './nexus';
 import { ThunderstoreSource } from './thunderstore';
 import type { SourceAdapter } from './types';
+import { t } from '../../../shared/i18n';
 
 export interface LocalEntry {
   title: string;
@@ -51,7 +52,7 @@ export class Sources {
     if (a) return a.project(ref, ctx);
     const l = this.local()[keyOf(ref)];
     return l
-      ? { ref, title: l.title, summary: 'Локальный файл', author: l.author ?? 'вы', downloads: 0, updated: l.versions[0]?.published ?? '', categories: [], url: '', kind: 'mod' }
+      ? { ref, title: l.title, summary: t('Локальный файл'), author: l.author ?? t('вы'), downloads: 0, updated: l.versions[0]?.published ?? '', categories: [], url: '', kind: 'mod' }
       : null;
   }
 

@@ -7,12 +7,13 @@ import { api, bridge } from '../api';
 import { ago, count, SOURCE_LABEL } from '../format';
 import { useActive, useUI } from '../store';
 import { Empty, ModIcon, Spinner, StatusChip, Switch } from '../components/ui';
+import { t, tk } from '../../shared/i18n';
 
 const KINDS: [ProjectKind, string][] = [
-  ['mod', 'Моды'],
-  ['modpack', 'Сборки'],
-  ['resourcepack', 'Ресурспаки'],
-  ['shader', 'Шейдеры'],
+  ['mod', tk('Моды')],
+  ['modpack', tk('Сборки')],
+  ['resourcepack', tk('Ресурспаки')],
+  ['shader', tk('Шейдеры')],
 ];
 
 export function Discover() {
@@ -61,7 +62,7 @@ export function Discover() {
   if (!profile || !def) return null;
   const installed = (p: ModProject) => !!profile.mods[keyOf(p.ref)];
 
-  const install = (p: ModProject, versionId?: string) => openPlan(`Установка «${p.title}»`, () => api.planInstall(profile.id, [{ ref: p.ref, versionId, title: p.title }]));
+  const install = (p: ModProject, versionId?: string) => openPlan(t('Установка «{0}»', p.title), () => api.planInstall(profile.id, [{ ref: p.ref, versionId, title: p.title }]));
   const importPack = async (p: ModProject) => {
     const c = await run(() => api.importModpack(p.ref));
     if (c) go('collections');
@@ -72,7 +73,7 @@ export function Discover() {
       <div className="screen">
         <div className="toolbar">
           {sources.length > 1 && (
-            <div className="seg" role="group" aria-label="Источник">
+            <div className="seg" role="group" aria-label={t("Источник")}>
               {sources.map((s) => (
                 <button key={s} aria-pressed={source === s} onClick={() => setSource(s)}>
                   {SOURCE_LABEL[s]}
@@ -84,46 +85,46 @@ export function Discover() {
             <Search size={15} />
             <input
               className="input"
-              placeholder={source === 'github' ? 'Поиск или владелец/репозиторий' : `Поиск на ${SOURCE_LABEL[source]}`}
+              placeholder={source === 'github' ? t('Поиск или владелец/репозиторий') : t('Поиск на {0}', SOURCE_LABEL[source])}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              aria-label="Поиск модов"
+              aria-label={t("Поиск модов")}
             />
           </div>
           {source === 'modrinth' && (
-            <div className="seg" role="group" aria-label="Тип">
+            <div className="seg" role="group" aria-label={t("Тип")}>
               {KINDS.map(([k, l]) => (
                 <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>
-                  {l}
+                  {t(l)}
                 </button>
               ))}
             </div>
           )}
           <span className="grow" />
           {source === 'modrinth' && (
-            <label className="row muted" title="Показывать только то, что подходит к версии игры и загрузчику профиля">
-              <Switch on={compatible} onChange={setCompatible} label="Только совместимые" />
-              Только совместимые
+            <label className="row muted" title={t("Показывать только то, что подходит к версии игры и загрузчику профиля")}>
+              <Switch on={compatible} onChange={setCompatible} label={t("Только совместимые")} />
+              {t('Только совместимые')}
             </label>
           )}
         </div>
 
         <div className="screen-scroll">
           {error ? (
-            <Empty title="Источник не ответил" text={error} action={<button className="btn" onClick={() => load(0)}>Повторить</button>} />
+            <Empty title={t("Источник не ответил")} text={error} action={<button className="btn" onClick={() => load(0)}>{t('Повторить')}</button>} />
           ) : hits.length === 0 && loading ? (
             <Empty
               icon={<Spinner size={22} />}
-              title={source === 'thunderstore' ? 'Загружаем индекс сообщества' : 'Ищем'}
-              text={source === 'thunderstore' ? 'Полный список пакетов скачивается один раз и потом берётся из кэша.' : undefined}
+              title={source === 'thunderstore' ? t('Загружаем индекс сообщества') : t('Ищем')}
+              text={source === 'thunderstore' ? t('Полный список пакетов скачивается один раз и потом берётся из кэша.') : undefined}
             />
           ) : hits.length === 0 ? (
-            <Empty title="Ничего не нашлось" text={compatible ? 'Попробуйте выключить «Только совместимые» или изменить запрос.' : 'Попробуйте другой запрос.'} />
+            <Empty title={t("Ничего не нашлось")} text={compatible ? t('Попробуйте выключить «Только совместимые» или изменить запрос.') : t('Попробуйте другой запрос.')} />
           ) : (
             <>
               <div className="row" style={{ marginBottom: 12 }}>
                 <span className="faint">
-                  {count(total)} результатов · {SOURCE_LABEL[source]}
+                  {t('{0} результатов · {1}', count(total), SOURCE_LABEL[source])}
                   {source === 'modrinth' && compatible && profile.context.gameVersion ? ` · ${profile.context.gameVersion} ${profile.context.loader ?? ''}` : ''}
                 </span>
               </div>
@@ -135,7 +136,7 @@ export function Discover() {
                       <div className="row">
                         <b className="ellipsis grow">{p.title}</b>
                         {installed(p) ? (
-                          <StatusChip tone="ok">В профиле</StatusChip>
+                          <StatusChip tone="ok">{t('В профиле')}</StatusChip>
                         ) : p.kind === 'modpack' ? (
                           <button
                             className="btn sm"
@@ -144,7 +145,7 @@ export function Discover() {
                               void importPack(p);
                             }}
                           >
-                            <Library size={13} /> В коллекции
+                            <Library size={13} /> {t('В коллекции')}
                           </button>
                         ) : (
                           <button
@@ -154,7 +155,7 @@ export function Discover() {
                               void install(p);
                             }}
                           >
-                            <Download size={13} /> Установить
+                            <Download size={13} /> {t('Установить')}
                           </button>
                         )}
                       </div>
@@ -179,7 +180,7 @@ export function Discover() {
               {hits.length < total && (
                 <div className="row" style={{ justifyContent: 'center', marginTop: 16 }}>
                   <button className="btn" disabled={loading} onClick={() => load(hits.length)}>
-                    {loading && <Spinner />} Показать ещё
+                    {loading && <Spinner />} {t('Показать ещё')}
                   </button>
                 </div>
               )}
@@ -215,7 +216,7 @@ function ProjectPanel({ p, onInstall, onClose }: { p: ModProject; onInstall: (p:
           <h2 className="ellipsis">{p.title}</h2>
           <div className="muted">{p.author}</div>
         </div>
-        <button className="btn ghost sm icon" onClick={onClose} aria-label="Закрыть">
+        <button className="btn ghost sm icon" onClick={onClose} aria-label={t("Закрыть")}>
           <X size={16} />
         </button>
       </div>
@@ -225,15 +226,15 @@ function ProjectPanel({ p, onInstall, onClose }: { p: ModProject; onInstall: (p:
         </p>
         {p.url && (
           <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => bridge.openExternal(p.url)}>
-            <ExternalLink size={13} /> Страница проекта
+            <ExternalLink size={13} /> {t('Страница проекта')}
           </button>
         )}
         {p.kind !== 'modpack' && (
           <div className="col">
-            <span className="label">Версии</span>
+            <span className="label">{t('Версии')}</span>
             {error && <span className="faint">{error}</span>}
             {!versions && !error && <Spinner />}
-            {versions?.length === 0 && <span className="faint">Нет версий для этого профиля.</span>}
+            {versions?.length === 0 && <span className="faint">{t('Нет версий для этого профиля.')}</span>}
             <div className="link-list">
               {versions?.map((v) => {
                 const ok = fitsContext(v, profile.context);
@@ -247,14 +248,14 @@ function ProjectPanel({ p, onInstall, onClose }: { p: ModProject; onInstall: (p:
                       </span>
                     </span>
                     {current ? (
-                      <StatusChip tone="accent">Установлена</StatusChip>
+                      <StatusChip tone="accent">{t('Установлена')}</StatusChip>
                     ) : ok ? (
                       <button className="btn sm" onClick={() => onInstall(p, v.versionId)}>
-                        Выбрать
+                        {t('Выбрать')}
                       </button>
                     ) : (
-                      <StatusChip tone="warn" title="Не подходит к версии игры или загрузчику профиля">
-                        Не подходит
+                      <StatusChip tone="warn" title={t("Не подходит к версии игры или загрузчику профиля")}>
+                        {t('Не подходит')}
                       </StatusChip>
                     )}
                   </div>

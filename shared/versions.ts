@@ -1,6 +1,7 @@
 // Version helpers tolerant of the loose version strings mods actually use
 // ("1.2", "v0.5.0-beta+mc1.21", "mc1.20.1-3.1.4").
 import semver from 'semver';
+import { t } from './i18n';
 
 export function coerce(v: string): semver.SemVer | null {
   const clean = semver.clean(v, { loose: true });
@@ -32,6 +33,6 @@ export function satisfies(version: string, range: string | undefined): boolean {
 
 /** Intersection check for display: do any versions satisfy every range? */
 export function describeRange(range?: string): string {
-  if (!range || range === '*') return 'любая версия';
+  if (!range || range === '*') return t('любая версия');
   return range;
 }

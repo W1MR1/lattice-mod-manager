@@ -4,13 +4,14 @@ import type { FomodPrompt } from '../../shared/types';
 import { pluginType, resolveFiles, validateChoices, walkSteps, type FileState, type FomodChoices, type FomodGroup } from '../../shared/fomod';
 import { plural } from '../format';
 import { Modal, StatusChip } from '../components/ui';
+import { t, tk } from '../../shared/i18n';
 
 const GROUP_HINT: Record<FomodGroup['type'], string> = {
-  SelectExactlyOne: 'выберите один',
-  SelectAtMostOne: 'не больше одного',
-  SelectAtLeastOne: 'хотя бы один',
-  SelectAll: 'ставятся все',
-  SelectAny: 'любые',
+  SelectExactlyOne: tk('выберите один'),
+  SelectAtMostOne: tk('не больше одного'),
+  SelectAtLeastOne: tk('хотя бы один'),
+  SelectAll: tk('ставятся все'),
+  SelectAny: tk('любые'),
 };
 
 /** Walks the user through each FOMOD installer in turn; resolves with every answer. */
@@ -22,7 +23,7 @@ export function FomodWizard({ prompts, onDone, onCancel }: { prompts: FomodPromp
     <FomodPromptView
       key={prompt.key}
       prompt={prompt}
-      position={prompts.length > 1 ? `Установщик ${index + 1} из ${prompts.length}` : undefined}
+      position={prompts.length > 1 ? t('Установщик {0} из {1}', index + 1, prompts.length) : undefined}
       onCancel={onCancel}
       onDone={(choices) => {
         const next = { ...answers, [prompt.key]: choices };
@@ -64,30 +65,30 @@ function FomodPromptView({ prompt, position, onDone, onCancel }: { prompt: Fomod
       sub={
         <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           <Puzzle size={14} />
-          {[position, `«${prompt.title}»`, steps.length ? `шаг ${Math.min(step, steps.length - 1) + 1} из ${steps.length}` : 'без шагов выбора'].filter(Boolean).join(' · ')}
+          {[position, `«${prompt.title}»`, steps.length ? t('шаг {0} из {1}', Math.min(step, steps.length - 1) + 1, steps.length) : t('без шагов выбора')].filter(Boolean).join(' · ')}
         </span>
       }
       onClose={onCancel}
       foot={
         <>
           <span className="grow faint">
-            {errors.length ? errors[0] : `Будет установлено: ${plural(fileCount, 'файл или папка', 'файла или папки', 'файлов и папок')}`}
+            {errors.length ? errors[0] : t('Будет установлено: {0}', plural(fileCount, 'файл или папка', 'файла или папки', 'файлов и папок'))}
           </span>
           <button className="btn ghost" onClick={onCancel}>
-            Отмена
+            {t('Отмена')}
           </button>
           {step > 0 && (
             <button className="btn" onClick={() => setStep(step - 1)}>
-              Назад
+              {t('Назад')}
             </button>
           )}
           {last ? (
             <button className="btn primary" disabled={errors.length > 0} onClick={() => onDone(walk.choices)}>
-              <Check size={15} /> Установить с этими опциями
+              <Check size={15} /> {t('Установить с этими опциями')}
             </button>
           ) : (
             <button className="btn primary" onClick={() => setStep(step + 1)}>
-              Далее
+              {t('Далее')}
             </button>
           )}
         </>
@@ -102,7 +103,7 @@ function FomodPromptView({ prompt, position, onDone, onCancel }: { prompt: Fomod
             return (
               <div className="col" key={g.name} role={single ? 'radiogroup' : 'group'} aria-label={g.name}>
                 <span className="label">
-                  {g.name} · {GROUP_HINT[g.type]}
+                  {g.name} · {t(GROUP_HINT[g.type])}
                 </span>
                 <div className="fomod-options">
                   {g.plugins.map((p) => {
@@ -125,9 +126,9 @@ function FomodPromptView({ prompt, position, onDone, onCancel }: { prompt: Fomod
                         <span className="grow" style={{ minWidth: 0 }}>
                           <span className="row" style={{ gap: 6 }}>
                             <b>{p.name}</b>
-                            {type === 'Recommended' && <StatusChip tone="ok">Рекомендуется</StatusChip>}
-                            {type === 'Required' && <StatusChip tone="accent">Обязательно</StatusChip>}
-                            {type === 'NotUsable' && <StatusChip tone="muted">Недоступно</StatusChip>}
+                            {type === 'Recommended' && <StatusChip tone="ok">{t('Рекомендуется')}</StatusChip>}
+                            {type === 'Required' && <StatusChip tone="accent">{t('Обязательно')}</StatusChip>}
+                            {type === 'NotUsable' && <StatusChip tone="muted">{t('Недоступно')}</StatusChip>}
                           </span>
                           {p.description && <span className="fomod-desc">{p.description}</span>}
                         </span>
@@ -140,7 +141,7 @@ function FomodPromptView({ prompt, position, onDone, onCancel }: { prompt: Fomod
           })}
         </>
       ) : (
-        <p className="muted">У этого установщика нет вариантов: поставятся обязательные файлы.</p>
+        <p className="muted">{t('У этого установщика нет вариантов: поставятся обязательные файлы.')}</p>
       )}
     </Modal>
   );

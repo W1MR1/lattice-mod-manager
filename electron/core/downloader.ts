@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DownloadState, DownloadView, ModFile } from '../../shared/types';
 import { APP_VERSION } from './app-info';
+import { t } from '../../shared/i18n';
 
 export const USER_AGENT = `Lattice-ModManager/${APP_VERSION} (desktop mod manager)`;
 
@@ -123,7 +124,7 @@ export class DownloadManager extends EventEmitter {
     j.state = 'cancelled';
     for (const s of j.segments) s.ctrl?.abort();
     if (wasActive) {
-      for (const w of j.waiters.splice(0)) w.reject(new Error('Загрузка отменена'));
+      for (const w of j.waiters.splice(0)) w.reject(new Error(t('Загрузка отменена')));
       void fs.rm(j.req.dest + '.part', { force: true });
     }
     this.changed();
@@ -238,7 +239,7 @@ export class DownloadManager extends EventEmitter {
       headers: { Range: 'bytes=0-0', 'User-Agent': USER_AGENT },
       redirect: 'follow',
     });
-    if (!res.ok && res.status !== 206) throw new Error(`Сервер ответил ${res.status} ${res.statusText}`);
+    if (!res.ok && res.status !== 206) throw new Error(t('Сервер ответил {0} {1}', res.status, res.statusText));
     j.url = res.url || j.req.url;
     const cr = res.headers.get('content-range');
     await res.body?.cancel().catch(() => undefined);
@@ -322,7 +323,7 @@ export class DownloadManager extends EventEmitter {
             j.url = again.url || j.req.url;
             throw new Error(`HTTP ${res.status}`);
           }
-          if (res.status !== 206 || !res.body) throw new Error(`HTTP ${res.status} на диапазон`);
+          if (res.status !== 206 || !res.body) throw new Error(t('HTTP {0} на диапазон', res.status));
           const reader = res.body.getReader();
           for (;;) {
             const { done, value } = await reader.read();
@@ -338,12 +339,12 @@ export class DownloadManager extends EventEmitter {
             if (seg.pos > seg.end || this.stopped(j)) break;
           }
           ctrl.abort();
-          if (seg.pos <= seg.end && !this.stopped(j)) throw new Error('Соединение закрылось раньше времени');
+          if (seg.pos <= seg.end && !this.stopped(j)) throw new Error(t('Соединение закрылось раньше времени'));
         } catch (e) {
           if (this.stopped(j)) return;
           if (seg.pos > seg.end) return;
           seg.retries++;
-          if (seg.retries > 6) throw new Error(`Сегмент ${seg.start}–${seg.end}: ${(e as Error).message}`);
+          if (seg.retries > 6) throw new Error(t('Сегмент {0}–{1}: {2}', seg.start, seg.end, (e as Error).message));
           await sleep(Math.min(8000, 400 * 2 ** seg.retries));
         }
       }
@@ -450,7 +451,7 @@ export async function verify(file: string, hashes?: ModFile['hashes']): Promise<
   if (!algo || !hashes) return 'none';
   const expected = hashes[algo]!.toLowerCase();
   const actual = await hashFile(file, algo);
-  if (actual !== expected) throw new Error(`Хэш ${algo} не совпал: файл повреждён или подменён`);
+  if (actual !== expected) throw new Error(t('Хэш {0} не совпал: файл повреждён или подменён', algo));
   return algo;
 }
 

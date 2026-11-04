@@ -6,6 +6,7 @@ import { plural } from '../format';
 import { useActive, useUI } from '../store';
 import { Empty, HealthRing, SevIcon } from '../components/ui';
 import { runFix } from './Mods';
+import { t } from '../../shared/i18n';
 
 const W = 196;
 const H = 38;
@@ -101,7 +102,7 @@ function layout(profile: Profile, report: CompatReport | null) {
       nodes.push({
         key: k,
         title: titleOf(k),
-        version: m?.version ?? 'не установлен',
+        version: m?.version ?? t('не установлен'),
         ghost: !m,
         enabled: m?.enabled ?? false,
         tone: !m ? 'err' : !m.enabled ? 'muted' : (issueTone.get(k) ?? 'ok'),
@@ -134,7 +135,7 @@ export function Graph() {
   if (g.nodes.length === 0)
     return (
       <div className="content">
-        <Empty icon={<Network size={32} color="var(--text-3)" />} title="Граф пуст" text="Установите моды — здесь появятся их связи: кто от кого зависит и кто с кем конфликтует." />
+        <Empty icon={<Network size={32} color="var(--text-3)" />} title={t("Граф пуст")} text={t("Установите моды — здесь появятся их связи: кто от кого зависит и кто с кем конфликтует.")} />
       </div>
     );
 
@@ -151,21 +152,21 @@ export function Graph() {
         <div className="toolbar">
           <div className="legend">
             <span>
-              <i /> требует
+              <i /> {t('требует')}
             </span>
             <span>
-              <i className="rec" /> рекомендует
+              <i className="rec" /> {t('рекомендует')}
             </span>
             <span>
-              <i className="conflict" /> конфликтует
+              <i className="conflict" /> {t('конфликтует')}
             </span>
-            <span>Пунктирная рамка — зависимость не установлена</span>
+            <span>{t('Пунктирная рамка — зависимость не установлена')}</span>
           </div>
           <span className="grow" />
-          <span className="faint">Зависимости слева, зависимые справа</span>
+          <span className="faint">{t('Зависимости слева, зависимые справа')}</span>
         </div>
         <div className="graph-wrap">
-          <svg width={g.width} height={g.height} role="img" aria-label={`Граф связей: ${g.nodes.length} узлов`}>
+          <svg width={g.width} height={g.height} role="img" aria-label={t('Граф связей: {0} узлов', g.nodes.length)}>
             {g.edges.map((e, i) => {
               const a = pos.get(e.from);
               const b = pos.get(e.to);
@@ -206,12 +207,12 @@ export function Graph() {
           </svg>
         </div>
       </div>
-      <aside className="graph-side" aria-label="Совместимость">
+      <aside className="graph-side" aria-label={t("Совместимость")}>
         {report && (
           <div className="row">
             <HealthRing score={report.score} size={52} />
             <div className="col" style={{ gap: 0 }}>
-              <b style={{ fontSize: 'var(--fs-lg)' }}>{report.errors === 0 && report.warnings === 0 ? 'Все связи сходятся' : 'Есть что поправить'}</b>
+              <b style={{ fontSize: 'var(--fs-lg)' }}>{report.errors === 0 && report.warnings === 0 ? t('Все связи сходятся') : t('Есть что поправить')}</b>
               <span className="muted">
                 {plural(report.errors, 'ошибка', 'ошибки', 'ошибок')} · {plural(report.warnings, 'предупреждение', 'предупреждения', 'предупреждений')}
               </span>
@@ -222,7 +223,7 @@ export function Graph() {
           <div className="card card-pad col">
             <b>{pickedNode.title}</b>
             <span className="mono muted">{pickedNode.version}</span>
-            {pickedIssues.length === 0 && <span className="faint">Проблем нет.</span>}
+            {pickedIssues.length === 0 && <span className="faint">{t('Проблем нет.')}</span>}
             {!pickedNode.ghost && (
               <button
                 className="btn sm"
@@ -232,13 +233,13 @@ export function Graph() {
                   go('mods');
                 }}
               >
-                Открыть в модах <ArrowUpRight size={13} />
+                {t('Открыть в модах')} <ArrowUpRight size={13} />
               </button>
             )}
           </div>
         )}
-        <span className="label">{picked ? 'Проблемы узла' : 'Все проблемы'}</span>
-        {(picked ? pickedIssues : issues).length === 0 && <span className="faint">Список пуст.</span>}
+        <span className="label">{picked ? t('Проблемы узла') : t('Все проблемы')}</span>
+        {(picked ? pickedIssues : issues).length === 0 && <span className="faint">{t('Список пуст.')}</span>}
         {(picked ? pickedIssues : issues).map((i) => (
           <div key={i.id} className="card" style={{ padding: 12, display: 'flex', gap: 10 }}>
             <SevIcon s={i.severity} />

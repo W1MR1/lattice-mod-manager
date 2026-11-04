@@ -11,6 +11,7 @@ import type {
   FomodPluginType,
   FomodStep,
 } from '../../shared/fomod';
+import { t } from '../../shared/i18n';
 
 type Node = Record<string, unknown>;
 
@@ -141,7 +142,7 @@ export function parseFomod(xml: string, root: string): FomodConfig {
   );
   const cond = (config.conditionalFileInstalls ?? {}) as Node;
   return {
-    moduleName: text(config.moduleName).trim() || 'Установщик',
+    moduleName: text(config.moduleName).trim() || t('Установщик'),
     root,
     required: files(config.requiredInstallFiles),
     steps,

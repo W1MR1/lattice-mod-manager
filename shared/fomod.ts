@@ -1,3 +1,4 @@
+import { t } from './i18n';
 // FOMOD installer model and its evaluation. Shared so the installer wizard in
 // the UI shows exactly the steps, defaults and files the main process installs.
 
@@ -134,9 +135,9 @@ export function validateChoices(config: FomodConfig, choices: FomodChoices, file
   for (const step of visible) {
     for (const g of step.groups) {
       const n = choices[step.name]?.[g.name]?.length ?? 0;
-      if (g.type === 'SelectExactlyOne' && n !== 1) errors.push(`«${step.name} / ${g.name}»: нужно выбрать ровно один вариант`);
-      if (g.type === 'SelectAtLeastOne' && n < 1) errors.push(`«${step.name} / ${g.name}»: нужен хотя бы один вариант`);
-      if (g.type === 'SelectAtMostOne' && n > 1) errors.push(`«${step.name} / ${g.name}»: не больше одного варианта`);
+      if (g.type === 'SelectExactlyOne' && n !== 1) errors.push(t('«{0} / {1}»: нужно выбрать ровно один вариант', step.name, g.name));
+      if (g.type === 'SelectAtLeastOne' && n < 1) errors.push(t('«{0} / {1}»: нужен хотя бы один вариант', step.name, g.name));
+      if (g.type === 'SelectAtMostOne' && n > 1) errors.push(t('«{0} / {1}»: не больше одного варианта', step.name, g.name));
     }
   }
   return errors;

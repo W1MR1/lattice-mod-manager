@@ -16,6 +16,7 @@ import type {
 import { keyOf } from '../../shared/types';
 import { fitsContext } from '../../shared/context';
 import { compareVersions, satisfies } from '../../shared/versions';
+import { t } from '../../shared/i18n';
 
 export interface ProjectMeta {
   title: string;
@@ -113,7 +114,7 @@ export async function resolvePlan(input: ResolveInput, provider: VersionProvider
           code: 'unresolvable',
           subject: k,
           related: [],
-          message: `Не удалось получить версии «${names.get(k) ?? ref.projectId}»: ${(e as Error).message}`,
+          message: t('Не удалось получить версии «{0}»: {1}', names.get(k) ?? ref.projectId, (e as Error).message),
         });
       }
       versionCache.set(k, list);
@@ -172,7 +173,7 @@ export async function resolvePlan(input: ResolveInput, provider: VersionProvider
     if (candidates.length === 0) {
       const why = cons
         .filter((c) => c.range)
-        .map((c) => `${c.from === 'user' ? 'вы' : names.get(c.from) ?? c.from}: ${c.range}`)
+        .map((c) => `${c.from === 'user' ? t('вы') : names.get(c.from) ?? c.from}: ${c.range}`)
         .join('; ');
       const total = all.length;
       issue({
@@ -182,8 +183,8 @@ export async function resolvePlan(input: ResolveInput, provider: VersionProvider
         related: cons.map((c) => c.from).filter((f) => f !== 'user'),
         message:
           total === 0
-            ? `«${names.get(key) ?? key}» не найден в источнике.`
-            : `Нет версии «${names.get(key) ?? key}» для ${ctxLabel(ctx)}${why ? ` (ограничения — ${why})` : ''}.`,
+            ? t('«{0}» не найден в источнике.', names.get(key) ?? key)
+            : t('Нет версии «{0}» для {1}{2}.', names.get(key) ?? key, ctxLabel(ctx), why ? t(' (ограничения — {0})', why) : ''),
       });
       continue;
     }
@@ -198,7 +199,7 @@ export async function resolvePlan(input: ResolveInput, provider: VersionProvider
         code: 'version-mismatch',
         subject: key,
         related: cons.map((c) => c.from).filter((f) => f !== 'user'),
-        message: `Нужна другая версия «${cur.installed.title}» (${cur.installed.version} → ${pick.version}). Разрешите обновление зависимостей.`,
+        message: t('Нужна другая версия «{0}» ({1} → {2}). Разрешите обновление зависимостей.', cur.installed.title, cur.installed.version, pick.version),
       });
       continue;
     }
@@ -238,8 +239,8 @@ export async function resolvePlan(input: ResolveInput, provider: VersionProvider
         code: 'conflict',
         subject: k,
         related: [ck],
-        message: `«${a}» несовместим с «${b}».`,
-        fix: other.installed ? { kind: 'disable', label: `Выключить «${b}»`, key: ck } : undefined,
+        message: t('«{0}» несовместим с «{1}».', a, b),
+        fix: other.installed ? { kind: 'disable', label: t('Выключить «{0}»', b), key: ck } : undefined,
       });
     }
   }
@@ -257,8 +258,8 @@ export async function resolvePlan(input: ResolveInput, provider: VersionProvider
           code: 'recommended',
           subject: k,
           related: [dk],
-          message: `«${names.get(k) ?? k}» рекомендует «${d.name ?? names.get(dk) ?? d.ref.projectId}».`,
-          fix: { kind: 'install', label: 'Добавить', ref: d.ref, versionId: d.versionId },
+          message: t('«{0}» рекомендует «{1}».', names.get(k) ?? k, d.name ?? names.get(dk) ?? d.ref.projectId),
+          fix: { kind: 'install', label: t('Добавить'), ref: d.ref, versionId: d.versionId },
         });
       }
     }
@@ -311,5 +312,5 @@ function refFromKey(key: string): ModRef {
 
 function ctxLabel(ctx: GameContext): string {
   const parts = [ctx.gameVersion, ctx.loader].filter(Boolean);
-  return parts.length ? parts.join(' + ') : 'этой игры';
+  return parts.length ? parts.join(' + ') : t('этой игры');
 }

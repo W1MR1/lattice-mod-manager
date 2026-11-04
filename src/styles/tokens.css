@@ -55,7 +55,7 @@
 }
 
 :root {
-  --font-ui: 'Manrope', system-ui, sans-serif;
+  --font-ui: 'Manrope', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   --fs-xs: 11px;

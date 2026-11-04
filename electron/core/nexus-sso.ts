@@ -2,6 +2,7 @@
 // open a socket, send our id, let the user approve the app in the browser, and
 // receive their API key over the socket. Lattice never sees the password.
 import { randomUUID } from 'node:crypto';
+import { t } from '../../shared/i18n';
 
 export const SSO_SOCKET = 'wss://sso.nexusmods.com';
 
@@ -29,7 +30,7 @@ export function ssoUrl(id: string, slug: string): string {
 
 /** Resolves with the user's API key once they approve Lattice on nexusmods.com. */
 export function nexusSso(opts: SsoOptions): Promise<string> {
-  if (!opts.slug) return Promise.reject(new Error('Вход через Nexus появится после регистрации Lattice в Nexus Mods'));
+  if (!opts.slug) return Promise.reject(new Error(t('Вход через Nexus появится после регистрации Lattice в Nexus Mods')));
   const make = opts.socketFactory ?? ((url: string) => new WebSocket(url) as unknown as SocketLike);
   const id = randomUUID();
   let token: string | null = null;
@@ -51,7 +52,7 @@ export function nexusSso(opts: SsoOptions): Promise<string> {
       if (err) reject(err);
       else resolve(key!);
     };
-    const timer = setTimeout(() => finish(new Error('Nexus не ответил: подтверждение не пришло за 5 минут')), opts.timeoutMs ?? 5 * 60_000);
+    const timer = setTimeout(() => finish(new Error(t('Nexus не ответил: подтверждение не пришло за 5 минут'))), opts.timeoutMs ?? 5 * 60_000);
 
     const connect = () => {
       socket = make(SSO_SOCKET);
@@ -70,7 +71,7 @@ export function nexusSso(opts: SsoOptions): Promise<string> {
         } catch {
           return;
         }
-        if (!msg.success) return finish(new Error(`Nexus отклонил вход${msg.error ? `: ${String(msg.error)}` : ''}`));
+        if (!msg.success) return finish(new Error(t('Nexus отклонил вход{0}', msg.error ? `: ${String(msg.error)}` : '')));
         if (msg.data?.connection_token) token = msg.data.connection_token;
         if (msg.data?.api_key) finish(null, msg.data.api_key);
       };
@@ -78,7 +79,7 @@ export function nexusSso(opts: SsoOptions): Promise<string> {
       socket.onclose = () => {
         if (done) return;
         if (retries++ < 3) setTimeout(connect, 1000 * retries);
-        else finish(new Error('Соединение с Nexus прервалось'));
+        else finish(new Error(t('Соединение с Nexus прервалось')));
       };
     };
     connect();

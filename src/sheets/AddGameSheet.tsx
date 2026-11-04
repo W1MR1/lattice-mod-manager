@@ -6,6 +6,7 @@ import { SOURCE_LABEL } from '../format';
 import { useUI } from '../store';
 import { Modal, Spinner } from '../components/ui';
 import { McContextFields } from './ProfileSheet';
+import { t } from '../../shared/i18n';
 
 export function AddGameSheet({ onClose }: { onClose: () => void }) {
   const defs = useUI((s) => s.defs);
@@ -37,35 +38,35 @@ export function AddGameSheet({ onClose }: { onClose: () => void }) {
 
   const add = async () => {
     setBusy(true);
-    const g = await run(() => api.addGame(defId, path, def?.kind === 'minecraft' ? ctx : {}), `${def?.name} добавлена`);
+    const g = await run(() => api.addGame(defId, path, def?.kind === 'minecraft' ? ctx : {}), t('{0} добавлена', def?.name));
     setBusy(false);
     if (g) onClose();
   };
 
   return (
     <Modal
-      title="Добавить игру"
+      title={t("Добавить игру")}
       sub={
         detected === null ? (
           <span className="row">
-            <Spinner /> Ищем установленные игры в библиотеках Steam…
+            <Spinner /> {t('Ищем установленные игры в библиотеках Steam…')}
           </span>
         ) : detected.length ? (
-          `Найдено установленных: ${detected.length}. Выберите игру и проверьте папку.`
+          t('Найдено установленных: {0}. Выберите игру и проверьте папку.', detected.length)
         ) : (
-          'Установленных игр не найдено — выберите игру и укажите папку вручную.'
+          t('Установленных игр не найдено — выберите игру и укажите папку вручную.')
         )
       }
       onClose={onClose}
       foot={
         <>
-          <span className="grow faint">{def?.notes}</span>
+          <span className="grow faint">{def?.notes && t(def.notes)}</span>
           <button className="btn ghost" onClick={onClose}>
-            Отмена
+            {t('Отмена')}
           </button>
           <button className="btn primary" disabled={!defId || !path || busy} onClick={add}>
             {busy && <Spinner />}
-            Добавить
+            {t('Добавить')}
           </button>
         </>
       }
@@ -83,7 +84,7 @@ export function AddGameSheet({ onClose }: { onClose: () => void }) {
                 <small className={found ? '' : 'faint'} style={found ? { color: 'var(--ok)' } : undefined}>
                   {found ? (
                     <span className="row" style={{ gap: 4 }}>
-                      <Radar size={12} /> найдена
+                      <Radar size={12} /> {t('найдена')}
                     </span>
                   ) : (
                     d.sources.filter((s) => s !== 'local').map((s) => SOURCE_LABEL[s]).join(' · ')
@@ -96,7 +97,7 @@ export function AddGameSheet({ onClose }: { onClose: () => void }) {
       </div>
       {def && (
         <div className="form-grid">
-          <label htmlFor="gpath">Папка {def.kind === 'minecraft' ? 'экземпляра' : 'игры'}</label>
+          <label htmlFor="gpath">{def.kind === 'minecraft' ? t('Папка экземпляра') : t('Папка игры')}</label>
           <div className="row">
             <input id="gpath" className="input grow mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\…" />
             <button
@@ -106,7 +107,7 @@ export function AddGameSheet({ onClose }: { onClose: () => void }) {
                 if (p) setPath(p);
               }}
             >
-              <FolderOpen size={15} /> Обзор
+              <FolderOpen size={15} /> {t('Обзор')}
             </button>
           </div>
           {def.kind === 'minecraft' && <McContextFields version={ctx.gameVersion} loader={ctx.loader} onChange={setCtx} />}

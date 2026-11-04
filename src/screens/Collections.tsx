@@ -6,6 +6,7 @@ import { ago, LOADER_LABEL, plural } from '../format';
 import { useActive, useUI } from '../store';
 import { Empty, StatusChip } from '../components/ui';
 import { CollectionSheet } from '../sheets/CollectionSheet';
+import { t } from '../../shared/i18n';
 
 function bump(v: string) {
   const m = /^(\d+)\.(\d+)\.(\d+)(.*)$/.exec(v);
@@ -33,7 +34,7 @@ export function Collections() {
     const p = await run(() => api.createProfileForCollection(c.id, game.id));
     if (!p) return;
     await run(() => api.switchProfile(game.id, p.id));
-    await openPlan(`Коллекция «${c.name}»`, () => api.planCollection(p.id, c.id));
+    await openPlan(t('Коллекция «{0}»', c.name), () => api.planCollection(p.id, c.id));
   };
 
   return (
@@ -41,22 +42,22 @@ export function Collections() {
       <div className="screen">
         <div className="toolbar">
           <span className="muted">
-            Коллекция — это замок на сборку: точные версии, хэши файлов, правила порядка и связи с другими коллекциями.
+            {t('Коллекция — это замок на сборку: точные версии, хэши файлов, правила порядка и связи с другими коллекциями.')}
           </span>
           <span className="grow" />
           <button className="btn" onClick={importFile}>
-            <Upload size={15} /> Импорт .json / .mrpack
+            <Upload size={15} /> {t('Импорт .json / .mrpack')}
           </button>
           <button className="btn primary" disabled={Object.keys(profile.mods).length === 0} onClick={() => setCreate(true)}>
-            <Plus size={15} /> Из текущего профиля
+            <Plus size={15} /> {t('Из текущего профиля')}
           </button>
         </div>
         <div className="screen-scroll">
           {mine.length === 0 ? (
             <Empty
               icon={<Library size={32} color="var(--text-3)" />}
-              title="Коллекций для этой игры пока нет"
-              text="Соберите профиль и закрепите его как коллекцию, импортируйте файл коллекции или сборку Modrinth (.mrpack) — её файлы будут привязаны к проектам по хэшам."
+              title={t("Коллекций для этой игры пока нет")}
+              text={t("Соберите профиль и закрепите его как коллекцию, импортируйте файл коллекции или сборку Modrinth (.mrpack) — её файлы будут привязаны к проектам по хэшам.")}
             />
           ) : (
             <div className="coll-grid">
@@ -69,12 +70,12 @@ export function Collections() {
                       <div className="grow" style={{ minWidth: 0 }}>
                         <h3 className="ellipsis">{c.name}</h3>
                         <span className="faint">
-                          {c.author || 'без автора'} · {ago(c.createdAt)}
-                          {c.importedFrom ? ` · из ${c.importedFrom}` : ''}
+                          {c.author || t('без автора')} · {ago(c.createdAt)}
+                          {c.importedFrom ? t(' · из {0}', c.importedFrom) : ''}
                         </span>
                       </div>
                       <span className="chip outline mono">{c.version}</span>
-                      {applied && <StatusChip tone="accent">В профиле</StatusChip>}
+                      {applied && <StatusChip tone="accent">{t('В профиле')}</StatusChip>}
                     </div>
                     {c.description && (
                       <p className="muted" style={{ margin: 0, fontSize: 'var(--fs-sm)' }}>
@@ -85,10 +86,10 @@ export function Collections() {
                       <span className="chip">
                         <Lock size={12} /> {plural(c.mods.length - optional, 'мод', 'мода', 'модов')}
                       </span>
-                      {optional > 0 && <span className="chip outline">+{optional} по желанию</span>}
+                      {optional > 0 && <span className="chip outline">{t('+{0} по желанию', optional)}</span>}
                       {c.game.gameVersion && <span className="chip outline mono">{c.game.gameVersion}</span>}
                       {c.game.loader && <span className="chip outline">{LOADER_LABEL[c.game.loader] ?? c.game.loader}</span>}
-                      {c.rules.length > 0 && <span className="chip outline">{plural(c.rules.length, 'правило', 'правила', 'правил')} порядка</span>}
+                      {c.rules.length > 0 && <span className="chip outline">{t('Правила порядка: {0}', c.rules.length)}</span>}
                     </div>
                     {(c.requires.length > 0 || c.conflicts.length > 0) && (
                       <div className="coll-links">
@@ -99,9 +100,9 @@ export function Collections() {
                             <span key={l.collectionId} className="row">
                               <Link2 size={13} color="var(--accent)" />
                               <span className="grow ellipsis">
-                                строится поверх «{target?.name ?? l.name ?? l.collectionId}» <span className="mono faint">{l.range}</span>
+                                {t('строится поверх «{0}»', target?.name ?? l.name ?? l.collectionId)} <span className="mono faint">{l.range}</span>
                               </span>
-                              {!target ? <StatusChip tone="err">Нет в библиотеке</StatusChip> : ok ? <StatusChip tone="ok">Применена</StatusChip> : <StatusChip tone="info">Поставится</StatusChip>}
+                              {!target ? <StatusChip tone="err">{t('Нет в библиотеке')}</StatusChip> : ok ? <StatusChip tone="ok">{t('Применена')}</StatusChip> : <StatusChip tone="info">{t('Поставится')}</StatusChip>}
                             </span>
                           );
                         })}
@@ -111,9 +112,9 @@ export function Collections() {
                             <span key={l.collectionId} className="row">
                               <Ban size={13} color="var(--err)" />
                               <span className="grow ellipsis">
-                                несовместима с «{byId.get(l.collectionId)?.name ?? l.name ?? l.collectionId}»{l.reason ? ` — ${l.reason}` : ''}
+                                {t('несовместима с «{0}»', byId.get(l.collectionId)?.name ?? l.name ?? l.collectionId)}{l.reason ? ` — ${l.reason}` : ''}
                               </span>
-                              {clash && <StatusChip tone="err">Конфликт</StatusChip>}
+                              {clash && <StatusChip tone="err">{t('Конфликт')}</StatusChip>}
                             </span>
                           );
                         })}
@@ -122,38 +123,38 @@ export function Collections() {
                     <div className="row" style={{ flexWrap: 'wrap', marginTop: 'auto' }}>
                       {applied ? (
                         <>
-                          <button className="btn sm" onClick={() => openPlan(`Сверка с «${c.name}»`, () => api.planCollection(profile.id, c.id))}>
-                            Сверить с замком
+                          <button className="btn sm" onClick={() => openPlan(t('Сверка с «{0}»', c.name), () => api.planCollection(profile.id, c.id))}>
+                            {t('Сверить с замком')}
                           </button>
                           <button
                             className="btn sm"
-                            title="Записать текущие версии профиля в коллекцию как новую версию"
+                            title={t("Записать текущие версии профиля в коллекцию как новую версию")}
                             onClick={() => run(() => api.relockCollection(c.id, profile.id, bump(c.version)), `«${c.name}» → ${bump(c.version)}`)}
                           >
-                            <Lock size={13} /> Перезакрепить
+                            <Lock size={13} /> {t('Перезакрепить')}
                           </button>
-                          <button className="btn sm ghost" onClick={() => run(() => api.removeCollectionFromProfile(profile.id, c.id), 'Коллекция убрана из профиля')}>
-                            Убрать из профиля
+                          <button className="btn sm ghost" onClick={() => run(() => api.removeCollectionFromProfile(profile.id, c.id), t('Коллекция убрана из профиля'))}>
+                            {t('Убрать из профиля')}
                           </button>
                         </>
                       ) : (
                         <>
-                          <button className="btn sm primary" onClick={() => openPlan(`Коллекция «${c.name}»`, () => api.planCollection(profile.id, c.id))}>
-                            Применить
+                          <button className="btn sm primary" onClick={() => openPlan(t('Коллекция «{0}»', c.name), () => api.planCollection(profile.id, c.id))}>
+                            {t('Применить')}
                           </button>
                           <button className="btn sm" onClick={() => toNewProfile(c)}>
-                            В новый профиль
+                            {t('В новый профиль')}
                           </button>
                         </>
                       )}
                       <span className="grow" />
-                      <button className="btn sm ghost icon" title="Связи и описание" aria-label="Изменить" onClick={() => setEdit(c)}>
+                      <button className="btn sm ghost icon" title={t("Связи и описание")} aria-label={t("Изменить")} onClick={() => setEdit(c)}>
                         <Pencil size={14} />
                       </button>
                       <button
                         className="btn sm ghost icon"
-                        title="Экспорт в файл"
-                        aria-label="Экспорт"
+                        title={t("Экспорт в файл")}
+                        aria-label={t("Экспорт")}
                         onClick={async () => {
                           const f = await bridge.dialog('collection-save', `${c.id}.lattice.json`);
                           if (f) await run(() => api.exportCollection(c.id, f));
@@ -161,7 +162,7 @@ export function Collections() {
                       >
                         <FileDown size={14} />
                       </button>
-                      <button className="btn sm ghost icon danger" title="Удалить из библиотеки" aria-label="Удалить" onClick={() => run(() => api.deleteCollection(c.id), 'Коллекция удалена')}>
+                      <button className="btn sm ghost icon danger" title={t("Удалить из библиотеки")} aria-label={t("Удалить")} onClick={() => run(() => api.deleteCollection(c.id), t('Коллекция удалена'))}>
                         <Trash2 size={14} />
                       </button>
                     </div>
@@ -170,7 +171,7 @@ export function Collections() {
               })}
             </div>
           )}
-          {otherCount > 0 && <p className="faint">Ещё {plural(otherCount, 'коллекция', 'коллекции', 'коллекций')} для других игр.</p>}
+          {otherCount > 0 && <p className="faint">{t('Ещё {0} для других игр.', plural(otherCount, 'коллекция', 'коллекции', 'коллекций'))}</p>}
         </div>
       </div>
       {create && <CollectionSheet profileId={profile.id} onClose={() => setCreate(false)} />}

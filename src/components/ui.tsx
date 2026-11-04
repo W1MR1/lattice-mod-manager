@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { CircleCheck, CircleX, Info, Loader, Minus, Plus, TriangleAlert, X } from 'lucide-react';
 import type { DownloadView, Severity } from '../../shared/types';
+import { t } from '../../shared/i18n';
 
 export type Tone = 'ok' | 'warn' | 'err' | 'info' | 'muted' | 'accent';
 
@@ -27,13 +28,13 @@ export function StatusChip({ tone, children, title }: { tone: Tone; children: Re
 }
 
 export function SevIcon({ s, size = 16 }: { s: Severity; size?: number }) {
-  const t = sevTone(s);
-  const Icon = TONE_ICON[t as 'err' | 'warn' | 'info'];
-  return <Icon size={size} className={`sev-${t}`} aria-label={s === 'error' ? 'Ошибка' : s === 'warning' ? 'Предупреждение' : 'Совет'} />;
+  const tone = sevTone(s);
+  const Icon = TONE_ICON[tone as 'err' | 'warn' | 'info'];
+  return <Icon size={size} className={`sev-${tone}`} aria-label={s === 'error' ? t('Ошибка') : s === 'warning' ? t('Предупреждение') : t('Совет')} />;
 }
 
 export function Spinner({ size = 14 }: { size?: number }) {
-  return <Loader size={size} className="spin" aria-label="Загрузка" />;
+  return <Loader size={size} className="spin" aria-label={t("Загрузка")} />;
 }
 
 export function Switch({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
@@ -73,7 +74,7 @@ export function HealthRing({ score, size = 32 }: { score: number; size?: number 
   const c = 2 * Math.PI * r;
   const tone = score >= 90 ? 'var(--ok)' : score >= 60 ? 'var(--warn)' : 'var(--err)';
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Совместимость ${score} из 100`}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={t('Совместимость {0} из 100', score)}>
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg-3)" strokeWidth={4} />
       <circle
         cx={size / 2}
@@ -107,7 +108,7 @@ export function SegmentBar({ d }: { d: DownloadView }) {
   }
   const pct = Math.round((d.received / size) * 100);
   return (
-    <div className="segbar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`Загружено ${pct}%`}>
+    <div className="segbar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={t('Загружено {0}%', pct)}>
       {d.segments.map((s, i) => {
         const left = (s.start / size) * 100;
         const width = ((s.end - s.start + 1) / size) * 100;
@@ -126,14 +127,14 @@ export function SegmentBar({ d }: { d: DownloadView }) {
 export function Stepper({ value, onChange, min, max, step = 1, suffix }: { value: number; onChange: (v: number) => void; min: number; max: number; step?: number; suffix?: string }) {
   return (
     <span className="stepper">
-      <button type="button" aria-label="Меньше" onClick={() => onChange(Math.max(min, +(value - step).toFixed(2)))}>
+      <button type="button" aria-label={t("Меньше")} onClick={() => onChange(Math.max(min, +(value - step).toFixed(2)))}>
         <Minus size={14} />
       </button>
       <span className="mono">
         {value}
         {suffix}
       </span>
-      <button type="button" aria-label="Больше" onClick={() => onChange(Math.min(max, +(value + step).toFixed(2)))}>
+      <button type="button" aria-label={t("Больше")} onClick={() => onChange(Math.min(max, +(value + step).toFixed(2)))}>
         <Plus size={14} />
       </button>
     </span>
@@ -165,7 +166,7 @@ export function Modal({ title, sub, onClose, children, foot, size }: { title: Re
             <h2>{title}</h2>
             {sub && <div className="muted">{sub}</div>}
           </div>
-          <button className="btn ghost icon" onClick={onClose} aria-label="Закрыть">
+          <button className="btn ghost icon" onClick={onClose} aria-label={t("Закрыть")}>
             <X size={18} />
           </button>
         </div>

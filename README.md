@@ -1,5 +1,12 @@
 # Lattice — менеджер модов и коллекций
 
+> **English:** Lattice is a mod and collection manager for Windows (Minecraft,
+> BepInEx games, Skyrim SE, Fallout 4, Cyberpunk 2077, Stardew Valley). Every
+> mod and collection is linked by dependencies, so installs and updates never
+> break a build. The app speaks English, 简体中文, Русский, Español,
+> Português (Brasil) and Deutsch: pick the language in the installer and change
+> it any time in Settings → Appearance → Language.
+
 ![Демо: установка Iris Shaders вместе с зависимостью Sodium](docs/demo-poster.png)
 
 Десктопное приложение (Electron + React) в духе Vortex, но со своим дизайном и
@@ -53,7 +60,8 @@ npm run dev
 |---|---|
 | `npm run build && npm start` | собрать и запустить без dev-сервера |
 | `npm run dist` | собрать установщик Windows: `release/Lattice-Setup-<версия>.exe` |
-| `npm test` | тесты движка: решатель, совместимость, загрузчик, архивы, FOMOD, plugins.txt, ссылки Nexus |
+| `npm test` | тесты движка: решатель, совместимость, загрузчик, архивы, FOMOD, plugins.txt, ссылки Nexus, удаление, переводы |
+| `npm run i18n` | проверка переводов: каких строк не хватает в каждом языке (`-- --sources` — список всех строк с ключами) |
 | `npm run typecheck` | проверка типов |
 | `npm run smoke` | сквозная проверка во временном профиле: ставит моды с Modrinth, разворачивает их, проверяет связанные коллекции и снимает скриншоты экранов в `smoke/` (флаги `--fixes` — проверка при запуске, загрузчик Fabric, удаление без следов; `--thunderstore`, `--archives`, `--light`) |
 | `npm run demo` | анимированный демо-ролик для сайта или README (`demo/`) |
@@ -133,6 +141,10 @@ Codeware. Lattice показывает их в «Обзоре» → GitHub, ко
 
 ## Что умеет
 
+- **Языки:** English, 简体中文, Русский, Español, Português (Brasil), Deutsch —
+  шесть самых распространённых языков игроков на ПК. Язык выбирается при
+  установке, сменить его можно в любой момент: Настройки → Вид → Язык.
+
 - **Игры:** Minecraft (Fabric/Quilt/Forge/NeoForge), Lethal Company, Valheim,
   Risk of Rain 2, Content Warning (BepInEx через Thunderstore), Skyrim SE,
   Fallout 4, Cyberpunk 2077, Stardew Valley. Игры находятся автоматически по
@@ -207,7 +219,9 @@ electron/core/
   sources/        Modrinth, Thunderstore (индекс сообщества с кэшем), Nexus Mods, GitHub Releases
   service.ts      всё, что может запросить интерфейс (без Electron, тестируется)
 electron/main.ts  окно, IPC с белым списком методов, диалоги, nxm://, обновления, режим --smoke
+shared/i18n.ts    переводы: t('Русский текст') ищет строку по короткому хэшу в shared/locales/*.ts
 src/              интерфейс (React, zustand), дизайн-система в src/styles/tokens.css
+build/installer.nsh  выбор языка в установщике и передача его приложению
 demo/             демо-ролик на наборе Stageshow (MIT): компонент и отчёт о репетиции
 docs/             RESEARCH.md — разбор Vortex, DESIGN-SYSTEM.md — токены и компоненты, кадры ролика
 ```
@@ -232,5 +246,8 @@ docs/             RESEARCH.md — разбор Vortex, DESIGN-SYSTEM.md — то
 - **Запуск Minecraft проверен на временной папке,** а не на живом лаунчере:
   загрузчик Fabric ставится с настоящего meta.fabricmc.net, профиль пишется в
   `launcher_profiles.json` (копия оригинала — `launcher_profiles.json.lattice-bak`).
+- **Переводы не вычитаны носителями языка.** Их сделал ИИ по русскому
+  оригиналу; исправления — в `shared/locales/*.ts`, `npm run i18n` проверит,
+  что ничего не потерялось.
 - «Без следов» не трогает реестр и файлы вне папки игры и папки данных Lattice:
   моды туда обычно не пишут, а угадывать там опасно.

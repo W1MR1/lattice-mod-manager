@@ -7,6 +7,7 @@ import type { Collection, CollectionLink, CollectionMod, Profile } from '../../s
 import { extractZip, listZip } from './archives';
 import { safeName, STAGED_PREFIX } from './installer';
 import type { ModrinthSource } from './sources/modrinth';
+import { t } from '../../shared/i18n';
 
 export function slugId(name: string, salt: string): string {
   const slug = name
@@ -67,13 +68,13 @@ export function fromProfile(profile: Profile, meta: CollectionMeta, existing: Co
 
 export function parseCollection(text: string): Collection {
   const c = JSON.parse(text) as Collection;
-  if (c.schema !== 'lattice.collection/1') throw new Error('Это не файл коллекции Lattice (нет schema lattice.collection/1)');
-  if (!c.id || !c.name || !Array.isArray(c.mods) || !c.game?.defId) throw new Error('Файл коллекции повреждён: нет id, name, game или mods');
+  if (c.schema !== 'lattice.collection/1') throw new Error(t('Это не файл коллекции Lattice (нет schema lattice.collection/1)'));
+  if (!c.id || !c.name || !Array.isArray(c.mods) || !c.game?.defId) throw new Error(t('Файл коллекции повреждён: нет id, name, game или mods'));
   c.requires ??= [];
   c.conflicts ??= [];
   c.rules ??= [];
   for (const m of c.mods) {
-    if (!m.ref?.source || !m.ref.projectId || !m.versionId) throw new Error(`Мод «${m.title ?? '?'}» в коллекции без ссылки на источник`);
+    if (!m.ref?.source || !m.ref.projectId || !m.versionId) throw new Error(t('Мод «{0}» в коллекции без ссылки на источник', m.title ?? '?'));
     m.deps ??= [];
     m.files ??= [];
     m.gameVersions ??= [];
@@ -102,11 +103,11 @@ const LOADER_KEYS: Record<string, string> = {
 /** Imports a Modrinth modpack (.mrpack). Files are linked back to their Modrinth projects by hash. */
 export async function importMrpack(file: string, modrinth: ModrinthSource, stagingRoot: string): Promise<Collection> {
   const names = await listZip(file);
-  if (!names.includes('modrinth.index.json')) throw new Error('В архиве нет modrinth.index.json — это не сборка Modrinth');
+  if (!names.includes('modrinth.index.json')) throw new Error(t('В архиве нет modrinth.index.json — это не сборка Modrinth'));
   const tmp = path.join(stagingRoot, '_import', safeName(path.basename(file)) + '-' + Date.now());
   await extractZip(file, tmp, (n) => (n === 'modrinth.index.json' ? n : null));
   const index = JSON.parse(await fs.readFile(path.join(tmp, 'modrinth.index.json'), 'utf8')) as MrpackIndex;
-  if (index.game !== 'minecraft') throw new Error(`Сборка для игры «${index.game}» не поддерживается`);
+  if (index.game !== 'minecraft') throw new Error(t('Сборка для игры «{0}» не поддерживается', index.game));
 
   const gameVersion = index.dependencies.minecraft;
   const loaderKey = Object.keys(index.dependencies).find((k) => LOADER_KEYS[k]);
@@ -178,7 +179,7 @@ export async function importMrpack(file: string, modrinth: ModrinthSource, stagi
     await fs.writeFile(path.join(dir, '.lattice-complete'), new Date().toISOString());
     mods.push({
       ref: { source: 'local', projectId: `${id}/overrides` },
-      title: `${index.name}: настройки сборки`,
+      title: t('{0}: настройки сборки', index.name),
       versionId: index.versionId,
       version: index.versionId,
       optional: false,

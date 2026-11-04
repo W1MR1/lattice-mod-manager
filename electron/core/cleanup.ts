@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { GameDef, InstalledMod, ModFile } from '../../shared/types';
 import { listArchive, readEntry } from './archives';
 import { safeName, walk } from './installer';
+import { t } from '../../shared/i18n';
 
 export interface Leftover {
   path: string;
@@ -98,12 +99,12 @@ export async function scanLeftovers(o: ScanOptions): Promise<Leftover[]> {
     // staged copies of every version of this mod for this game
     const modDir = path.join(o.stagingRoot, safeName(`${m.ref.source}_${m.ref.projectId}`));
     for (const v of await fs.readdir(modDir).catch(() => [] as string[])) {
-      await add({ path: path.join(modDir, v), kind: 'staging', owner: m.key, ownerTitle: m.title, note: 'подготовленная копия мода', checked: true });
+      await add({ path: path.join(modDir, v), kind: 'staging', owner: m.key, ownerTitle: m.title, note: t('подготовленная копия мода'), checked: true });
     }
     // cached downloads
     for (const f of m.files) {
       if (!/^https?:|^nexus:/.test(f.url)) continue;
-      await add({ path: path.dirname(o.cachePathOf(f)), kind: 'download', owner: m.key, ownerTitle: m.title, note: 'скачанный архив', checked: true });
+      await add({ path: path.dirname(o.cachePathOf(f)), kind: 'download', owner: m.key, ownerTitle: m.title, note: t('скачанный архив'), checked: true });
     }
     // settings the mod wrote into the game folder while running
     if (o.def.kind === 'minecraft') {
@@ -111,7 +112,7 @@ export async function scanLeftovers(o: ScanOptions): Promise<Leftover[]> {
       for (const jar of jars) {
         for (const id of await minecraftModIds(path.join(m.stagedPath, jar))) {
           for (const p of await matchByName(path.join(o.installPath, 'config'), id)) {
-            await add({ path: p, kind: 'config', owner: m.key, ownerTitle: m.title, note: `настройки мода (${id})`, checked: true });
+            await add({ path: p, kind: 'config', owner: m.key, ownerTitle: m.title, note: t('настройки мода ({0})', id), checked: true });
           }
         }
       }
@@ -121,7 +122,7 @@ export async function scanLeftovers(o: ScanOptions): Promise<Leftover[]> {
         const cfgDir = path.join(o.installPath, 'BepInEx', 'config');
         for (const e of await fs.readdir(cfgDir).catch(() => [] as string[])) {
           if (e.replace(/[^a-z0-9]/gi, '').toLowerCase().includes(name)) {
-            await add({ path: path.join(cfgDir, e), kind: 'config', owner: m.key, ownerTitle: m.title, note: 'настройки плагина (совпадение по имени)', checked: true });
+            await add({ path: path.join(cfgDir, e), kind: 'config', owner: m.key, ownerTitle: m.title, note: t('настройки плагина (совпадение по имени)'), checked: true });
           }
         }
       }

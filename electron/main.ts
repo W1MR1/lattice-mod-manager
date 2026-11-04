@@ -8,6 +8,8 @@ import { execFile } from 'node:child_process';
 import { listArchive, sevenZip } from './core/archives';
 import type { LaunchTarget } from './core/launch';
 import { Service } from './core/service';
+import { LANGS, langFromLcid, langFromLocale, type Lang } from '../shared/i18n';
+import { t } from '../shared/i18n';
 
 const smoke = process.argv.includes('--smoke');
 if (smoke) app.setPath('userData', path.join(os.tmpdir(), `lattice-smoke-${Date.now()}`));
@@ -48,7 +50,7 @@ function fromOurWindow(e: Electron.IpcMainInvokeEvent) {
 function registerIpc() {
   ipcMain.handle('lattice:call', async (e, method: string, args: unknown[]) => {
     if (!fromOurWindow(e)) throw new Error('forbidden');
-    if (!ALLOWED.has(method as keyof Service)) throw new Error(`Неизвестный метод ${method}`);
+    if (!ALLOWED.has(method as keyof Service)) throw new Error(t('Неизвестный метод {0}', method));
     const fn = (service as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
     return fn.apply(service, Array.isArray(args) ? args : []);
   });
@@ -72,15 +74,15 @@ function registerIpc() {
     if (kind === 'files') {
       const r = await dialog.showOpenDialog(win, {
         properties: ['openFile', 'multiSelections'],
-        filters: [{ name: 'Моды', extensions: ['zip', 'jar', 'dll', 'esp', 'esm', 'esl', 'pak', 'ba2', 'bsa'] }, { name: 'Все файлы', extensions: ['*'] }],
+        filters: [{ name: t('Моды'), extensions: ['zip', 'jar', 'dll', 'esp', 'esm', 'esl', 'pak', 'ba2', 'bsa'] }, { name: t('Все файлы'), extensions: ['*'] }],
       });
       return r.canceled ? null : r.filePaths;
     }
     if (kind === 'collection-open') {
-      const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Коллекции', extensions: ['json', 'mrpack'] }] });
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: t('Коллекции'), extensions: ['json', 'mrpack'] }] });
       return r.canceled ? null : r.filePaths[0];
     }
-    const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: 'Коллекция Lattice', extensions: ['json'] }] });
+    const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: t('Коллекция Lattice'), extensions: ['json'] }] });
     return r.canceled ? null : r.filePath;
   });
 
@@ -98,7 +100,7 @@ function registerIpc() {
   ipcMain.handle('lattice:update', async (e, action: 'check' | 'download' | 'install' | 'snooze') => {
     if (!fromOurWindow(e)) throw new Error('forbidden');
     if (action === 'snooze') return service.updateSettings({ updateSnoozedUntil: Date.now() + 7 * 24 * 3600 * 1000 });
-    if (!app.isPackaged) throw new Error('Обновления работают только в установленной версии');
+    if (!app.isPackaged) throw new Error(t('Обновления работают только в установленной версии'));
     if (action === 'check') {
       manualUpdateCheck = true;
       // a failed check reaches the window through the 'error' event
@@ -353,20 +355,33 @@ function setupUpdates() {
 // ---------- starting games
 
 /** Runs a launch target the service asked for, after checking it is one Lattice may start. */
-async function launch(t: LaunchTarget) {
-  if (smoke) return void trace(`smoke: would launch ${JSON.stringify(t)}`);
-  if (t.kind === 'steam') {
-    if (!/^\d+$/.test(t.appId)) throw new Error('bad app id');
-    await shell.openExternal(`steam://rungameid/${t.appId}`);
+async function launch(target: LaunchTarget) {
+  if (smoke) return void trace(`smoke: would launch ${JSON.stringify(target)}`);
+  if (target.kind === 'steam') {
+    if (!/^\d+$/.test(target.appId)) throw new Error('bad app id');
+    await shell.openExternal(`steam://rungameid/${target.appId}`);
     return;
   }
-  const exe = path.resolve(t.path);
+  const exe = path.resolve(target.path);
   const inGame = service.state().games.some((g) => exe.toLowerCase().startsWith(path.resolve(g.installPath).toLowerCase() + path.sep));
   const isLauncher = /^(MinecraftLauncher|Minecraft)\.exe$/i.test(path.basename(exe));
-  if (!/\.exe$/i.test(exe) || !(inGame || isLauncher)) throw new Error('Этот файл Lattice запускать не будет');
+  if (!/\.exe$/i.test(exe) || !(inGame || isLauncher)) throw new Error(t('Этот файл Lattice запускать не будет'));
   const st = await fs.stat(exe).catch(() => null);
-  if (!st?.isFile()) throw new Error(`Не найден ${exe}`);
+  if (!st?.isFile()) throw new Error(t('Не найден {0}', exe));
   spawn(exe, [], { cwd: path.dirname(exe), detached: true, stdio: 'ignore', windowsHide: false }).unref();
+}
+
+/**
+ * Language on first start: the one picked in the installer (it leaves the
+ * Windows language id next to the app), otherwise the system language.
+ */
+async function firstRunLanguage(): Promise<Lang> {
+  if (app.isPackaged) {
+    const lcid = Number((await fs.readFile(path.join(process.resourcesPath, 'installer-language'), 'utf8').catch(() => '')).trim());
+    const picked = langFromLcid(lcid);
+    if (picked) return picked;
+  }
+  return langFromLocale(app.getPreferredSystemLanguages()[0] ?? app.getLocale());
 }
 
 /** Secrets at rest go through the OS keychain when it is available. */
@@ -392,11 +407,14 @@ app.whenReady().then(async () => {
     send('state', s);
     syncNxmProtocol(s.settings.handleNxm);
   });
-  service.on('toast', (t) => send('toast', t));
+  service.on('toast', (toast) => send('toast', toast));
   service.on('deployed', (d) => send('deployed', d));
   service.on('plan', (p) => send('plan', p));
   service.downloads.on('update', (list) => send('downloads', list));
   syncNxmProtocol(service.settings.handleNxm);
+  const smokeLang = process.argv.find((a) => a.startsWith('--lang='))?.slice(7) as Lang | undefined;
+  if (smokeLang && LANGS.some((l) => l.id === smokeLang)) service.updateSettings({ language: smokeLang });
+  else if (!service.settings.language) service.updateSettings({ language: await firstRunLanguage() });
   registerIpc();
   if (smoke) {
     app.on('render-process-gone', (_e, _wc, d) => trace(`renderer gone: ${d.reason}`));

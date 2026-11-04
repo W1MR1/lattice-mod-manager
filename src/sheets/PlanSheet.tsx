@@ -7,6 +7,7 @@ import { api } from '../api';
 import { bytes, plural, SOURCE_LABEL, speed } from '../format';
 import { useActive, useUI } from '../store';
 import { ModIcon, Modal, SegmentBar, SevIcon, Spinner, StatusChip, Switch } from '../components/ui';
+import { t } from '../../shared/i18n';
 
 export function PlanSheet() {
   const plan = useUI((s) => s.plan);
@@ -14,9 +15,9 @@ export function PlanSheet() {
   const close = useUI((s) => s.closePlan);
   if (planning && !plan) {
     return (
-      <Modal title={planning} sub="Подбираем версии и проверяем все связи…" onClose={close} size="sm">
+      <Modal title={planning} sub={t("Подбираем версии и проверяем все связи…")} onClose={close} size="sm">
         <div className="row muted" style={{ padding: '8px 0 16px' }}>
-          <Spinner size={18} /> Строим граф зависимостей
+          <Spinner size={18} /> {t('Строим граф зависимостей')}
         </div>
       </Modal>
     );
@@ -36,7 +37,7 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
   const titles = new Map<string, string>([
     ...[...plan.install, ...plan.update].map((i) => [i.key, i.title] as const),
     ...Object.values(profile?.mods ?? {}).map((m) => [m.key, m.title] as const),
-    ...(state?.collections ?? []).map((c) => [`collection:${c.id}`, `коллекция «${c.name}»`] as const),
+    ...(state?.collections ?? []).map((c) => [`collection:${c.id}`, t('коллекция «{0}»', c.name)] as const),
   ]);
   const deps = plan.install.filter((i) => i.reason === 'dependency').length;
   const size = [...plan.install, ...plan.update].reduce((a, i) => a + (i.version.files.find((f) => f.primary)?.size ?? i.version.files[0]?.size ?? 0), 0);
@@ -70,12 +71,12 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
       title={plan.label}
       sub={
         <div className="plan-summary" style={{ marginTop: 6 }}>
-          {plan.install.length > 0 && <span className="chip accent">+ {plan.install.length} установить</span>}
-          {deps > 0 && <span className="chip">{plural(deps, 'зависимость', 'зависимости', 'зависимостей')} подтянется</span>}
-          {plan.update.length > 0 && <span className="chip info">{plan.update.length} обновить</span>}
-          {plan.keep.length > 0 && <span className="chip outline">{plan.keep.length} без изменений</span>}
+          {plan.install.length > 0 && <span className="chip accent">{t('+ {0} установить', plan.install.length)}</span>}
+          {deps > 0 && <span className="chip">{t('{0} подтянется', plural(deps, 'зависимость', 'зависимости', 'зависимостей'))}</span>}
+          {plan.update.length > 0 && <span className="chip info">{t('{0} обновить', plan.update.length)}</span>}
+          {plan.keep.length > 0 && <span className="chip outline">{t('{0} без изменений', plan.keep.length)}</span>}
           {size > 0 && <span className="chip outline mono">≈ {bytes(size)}</span>}
-          {plan.ok ? <StatusChip tone="ok">Связи сходятся</StatusChip> : <StatusChip tone="err">{plural(errors.length, 'проблема', 'проблемы', 'проблем')}</StatusChip>}
+          {plan.ok ? <StatusChip tone="ok">{t('Связи сходятся')}</StatusChip> : <StatusChip tone="err">{plural(errors.length, 'проблема', 'проблемы', 'проблем')}</StatusChip>}
         </div>
       }
       onClose={busy ? () => undefined : onClose}
@@ -83,17 +84,17 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
         <>
           {!plan.ok && (
             <label className="row muted">
-              <Switch on={force} onChange={setForce} label="Применить несмотря на ошибки" />
-              Применить несмотря на ошибки
+              <Switch on={force} onChange={setForce} label={t("Применить несмотря на ошибки")} />
+              {t('Применить несмотря на ошибки')}
             </label>
           )}
           <span className="grow" />
           <button className="btn ghost" onClick={onClose} disabled={busy}>
-            Отмена
+            {t('Отмена')}
           </button>
           <button className="btn primary" disabled={busy || nothing || (!plan.ok && !force)} onClick={() => apply()}>
             {busy && <Spinner />}
-            {busy ? (prompts ? 'Ждём ответов установщика…' : 'Скачиваем и устанавливаем…') : nothing ? 'Нечего менять' : 'Применить'}
+            {busy ? (prompts ? t('Ждём ответов установщика…') : t('Скачиваем и устанавливаем…')) : nothing ? t('Нечего менять') : t('Применить')}
           </button>
         </>
       }
@@ -131,7 +132,7 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
               <div className="row">
                 <b className="grow ellipsis">{d.title}</b>
                 <span className="mono muted">
-                  {speed(d.speed)} · {d.connections} пот.
+                  {speed(d.speed)} · {d.connections} {t('пот.')}
                 </span>
               </div>
               <SegmentBar d={d} />
@@ -140,9 +141,9 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
         </div>
       )}
 
-      {plan.install.length > 0 && <Section title="Будет установлено" items={plan.install} titles={titles} />}
-      {plan.update.length > 0 && <Section title="Будет обновлено" items={plan.update} titles={titles} />}
-      {nothing && <p className="muted">Всё уже установлено в нужных версиях — профиль не изменится.</p>}
+      {plan.install.length > 0 && <Section title={t("Будет установлено")} items={plan.install} titles={titles} />}
+      {plan.update.length > 0 && <Section title={t("Будет обновлено")} items={plan.update} titles={titles} />}
+      {nothing && <p className="muted">{t('Всё уже установлено в нужных версиях — профиль не изменится.')}</p>}
       {prompts && (
         <FomodWizard
           prompts={prompts}
@@ -171,7 +172,7 @@ function Section({ title, items, titles }: { title: string; items: PlanItem[]; t
               <small className="ellipsis">
                 {i.reason === 'dependency' ? (
                   <span className="row" style={{ gap: 4 }}>
-                    <CornerDownRight size={12} /> нужен для {i.requiredBy.map((k) => titles.get(k) ?? k).join(', ') || '—'}
+                    <CornerDownRight size={12} /> {t('нужен для {0}', i.requiredBy.map((k) => titles.get(k) ?? k).join(', ') || '—')}
                   </span>
                 ) : i.reason === 'collection' ? (
                   <span className="row" style={{ gap: 4 }}>
@@ -179,7 +180,7 @@ function Section({ title, items, titles }: { title: string; items: PlanItem[]; t
                   </span>
                 ) : (
                   <span className="row" style={{ gap: 4 }}>
-                    <Package size={12} /> по вашему запросу
+                    <Package size={12} /> {t('по вашему запросу')}
                   </span>
                 )}
               </small>

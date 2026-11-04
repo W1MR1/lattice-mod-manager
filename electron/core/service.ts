@@ -52,6 +52,7 @@ import { findMinecraftLauncher, gameLaunchTarget, installMinecraftLoader, isOffi
 export { collectOrphans, recomputeLinks } from './links';
 import { NEXUS_SLUG } from './app-info';
 import { nexusSso } from './nexus-sso';
+import { LANGS, setLang, t } from '../../shared/i18n';
 
 export type Toast = { kind: 'ok' | 'err' | 'info'; text: string; undo?: { label: string; snapshotId: string } };
 
@@ -84,11 +85,12 @@ export class Service extends EventEmitter {
     private openBrowser: (url: string) => void | Promise<void> = () => undefined,
     /** starts a game: through Steam or an executable (main checks both) */
     private launcher: (t: LaunchTarget) => Promise<void> = async () => {
-      throw new Error('Запуск игр недоступен');
+      throw new Error(t('Запуск игр недоступен'));
     },
   ) {
     super();
     this.store = new Store(stateFile, dataRoot);
+    if (this.settings.language) setLang(this.settings.language);
     this.sources = new Sources(
       () => this.dir('cache'),
       gameDef,
@@ -141,19 +143,19 @@ export class Service extends EventEmitter {
 
   private profile(id: string): Profile {
     const p = this.store.state.profiles.find((x) => x.id === id);
-    if (!p) throw new Error('Профиль не найден');
+    if (!p) throw new Error(t('Профиль не найден'));
     return p;
   }
 
   private game(id: string): ManagedGame {
     const g = this.store.state.games.find((x) => x.id === id);
-    if (!g) throw new Error('Игра не найдена');
+    if (!g) throw new Error(t('Игра не найдена'));
     return g;
   }
 
   private defOf(game: ManagedGame) {
     const d = gameDef(game.defId);
-    if (!d) throw new Error(`Неизвестная игра ${game.defId}`);
+    if (!d) throw new Error(t('Неизвестная игра {0}', game.defId));
     return d;
   }
 
@@ -173,14 +175,14 @@ export class Service extends EventEmitter {
 
   async addGame(defId: string, installPath: string, ctx: Partial<GameContext> = {}): Promise<ManagedGame> {
     const def = gameDef(defId);
-    if (!def) throw new Error('Неизвестная игра');
+    if (!def) throw new Error(t('Неизвестная игра'));
     const st = await fs.stat(installPath).catch(() => null);
-    if (!st?.isDirectory()) throw new Error('Папка игры не найдена');
+    if (!st?.isDirectory()) throw new Error(t('Папка игры не найдена'));
     const id = `${defId}-${randomUUID().slice(0, 6)}`;
     const profile: Profile = {
       id: randomUUID(),
       gameId: id,
-      name: 'Основной',
+      name: t('Основной'),
       context: { gameDefId: defId, gameVersion: ctx.gameVersion, loader: ctx.loader ?? def.loaders?.[0] },
       mods: {},
       rules: [],
@@ -219,7 +221,7 @@ export class Service extends EventEmitter {
     const p: Profile = {
       id: randomUUID(),
       gameId,
-      name: name || 'Новый профиль',
+      name: name || t('Новый профиль'),
       context: { ...base.context, ...context, gameDefId: game.defId },
       mods: copyFrom ? structuredClone(base.mods) : {},
       rules: copyFrom ? structuredClone(base.rules) : [],
@@ -242,7 +244,7 @@ export class Service extends EventEmitter {
     const p = this.profile(id);
     const game = this.game(p.gameId);
     const others = this.store.state.profiles.filter((x) => x.gameId === p.gameId && x.id !== id);
-    if (others.length === 0) throw new Error('Нельзя удалить единственный профиль игры');
+    if (others.length === 0) throw new Error(t('Нельзя удалить единственный профиль игры'));
     if (game.activeProfileId === id) await this.switchProfile(game.id, others[0].id);
     this.store.state.profiles = this.store.state.profiles.filter((x) => x.id !== id);
     this.store.state.snapshots = this.store.state.snapshots.filter((s) => s.profileId !== id);
@@ -256,7 +258,7 @@ export class Service extends EventEmitter {
     await this.purge(gameId).catch(() => 0);
     game.activeProfileId = profileId;
     this.changed();
-    await this.deploy(profileId).catch((e) => this.toast('err', `Развёртывание: ${(e as Error).message}`));
+    await this.deploy(profileId).catch((e) => this.toast('err', t('Развёртывание: {0}', (e as Error).message)));
   }
 
   // ---------- compatibility
@@ -335,7 +337,7 @@ export class Service extends EventEmitter {
 
   async planInstall(profileId: string, requests: PlanRequest[], opts: { allowUpdates?: boolean; label?: string } = {}): Promise<InstallPlan> {
     const p = this.profile(profileId);
-    const label = opts.label ?? (requests.length === 1 ? `Установка «${requests[0].title ?? requests[0].ref.projectId}»` : `Установка ${requests.length} модов`);
+    const label = opts.label ?? (requests.length === 1 ? t('Установка «{0}»', requests[0].title ?? requests[0].ref.projectId) : t('Установка {0} модов', requests.length));
     const plan = await resolvePlan(
       { profile: p, requests, reason: 'explicit', includeRecommended: this.settings.includeRecommended, allowUpdates: opts.allowUpdates ?? true, label },
       this.sources.provider(p.context),
@@ -351,7 +353,7 @@ export class Service extends EventEmitter {
     return this.planInstall(
       profileId,
       targets.map((m) => ({ ref: m.ref, title: m.title })),
-      { allowUpdates: true, label: keys?.length === 1 ? `Обновление «${targets[0]?.title}»` : 'Безопасное обновление модов' },
+      { allowUpdates: true, label: keys?.length === 1 ? t('Обновление «{0}»', targets[0]?.title) : t('Безопасное обновление модов') },
     );
   }
 
@@ -360,9 +362,9 @@ export class Service extends EventEmitter {
     const all = this.store.state.collections;
     const { order: chain, missing } = collectionClosure(collectionId, all);
     const target = chain[chain.length - 1];
-    if (!target) throw new Error('Коллекция не найдена');
+    if (!target) throw new Error(t('Коллекция не найдена'));
     const extra: Issue[] = [];
-    if (target.game.defId !== p.context.gameDefId) throw new Error(`Коллекция «${target.name}» для другой игры`);
+    if (target.game.defId !== p.context.gameDefId) throw new Error(t('Коллекция «{0}» для другой игры', target.name));
     if ((target.game.gameVersion && target.game.gameVersion !== p.context.gameVersion) || (target.game.loader && target.game.loader !== p.context.loader)) {
       extra.push({
         id: `ctx:${target.id}`,
@@ -370,7 +372,7 @@ export class Service extends EventEmitter {
         code: 'incompatible-game',
         subject: `collection:${target.id}`,
         related: [],
-        message: `Коллекция собрана для ${[target.game.gameVersion, target.game.loader].filter(Boolean).join(' + ')}, а профиль — ${[p.context.gameVersion, p.context.loader].filter(Boolean).join(' + ')}. Закреплённые версии могут быть заменены. Надёжнее создать отдельный профиль под коллекцию.`,
+        message: t('Коллекция собрана для {0}, а профиль — {1}. Закреплённые версии могут быть заменены. Надёжнее создать отдельный профиль под коллекцию.', [target.game.gameVersion, target.game.loader].filter(Boolean).join(' + '), [p.context.gameVersion, p.context.loader].filter(Boolean).join(' + ')),
       });
     }
     for (const m of missing) {
@@ -380,7 +382,7 @@ export class Service extends EventEmitter {
         code: 'collection-missing',
         subject: `collection:${target.id}`,
         related: [`collection:${m.collectionId}`],
-        message: `Коллекция строится поверх «${m.name ?? m.collectionId}»${m.range ? ` ${m.range}` : ''}, но её нет в библиотеке. Импортируйте её.`,
+        message: t('Коллекция строится поверх «{0}»{1}, но её нет в библиотеке. Импортируйте её.', m.name ?? m.collectionId, m.range ? ` ${m.range}` : ''),
       });
     }
     const chainIds = new Set(chain.map((c) => c.id));
@@ -395,7 +397,7 @@ export class Service extends EventEmitter {
           code: 'collection-conflict',
           subject: `collection:${c.id}`,
           related: [`collection:${link.collectionId}`],
-          message: `«${c.name}» несовместима с «${other?.name ?? link.collectionId}»${link.reason ? `: ${link.reason}` : ''}.`,
+          message: t('«{0}» несовместима с «{1}»{2}.', c.name, other?.name ?? link.collectionId, link.reason ? `: ${link.reason}` : ''),
         });
       }
     }
@@ -423,7 +425,7 @@ export class Service extends EventEmitter {
       }
     }
     const plan = await resolvePlan(
-      { profile: p, requests, reason: 'collection', includeRecommended: false, allowUpdates: true, label: `Коллекция «${target.name}»` },
+      { profile: p, requests, reason: 'collection', includeRecommended: false, allowUpdates: true, label: t('Коллекция «{0}»', target.name) },
       this.sources.provider(p.context, overlay, overlayMeta),
       randomUUID(),
     );
@@ -485,7 +487,7 @@ export class Service extends EventEmitter {
     if (nexus) {
       const nxm = this.nxmKeys.get(`${nexus.domain}/${nexus.modId}/${nexus.fileId}`);
       const url = await this.sources.nexus.downloadLink(nexus.domain, nexus.modId, nexus.fileId, nxm);
-      if (!this.isTrusted(url)) throw new Error(`Nexus вернул ссылку на неизвестный хост: ${new URL(url).hostname}`);
+      if (!this.isTrusted(url)) throw new Error(t('Nexus вернул ссылку на неизвестный хост: {0}', new URL(url).hostname));
       // Free accounts are limited by Nexus per connection; one connection keeps within their terms.
       const premium = this.settings.nexusUser?.premium === true;
       return this.downloads.enqueue({ url, dest, title, size: f.size, hashes: f.hashes, maxConnections: premium ? undefined : 1 }).done;
@@ -497,7 +499,7 @@ export class Service extends EventEmitter {
       } catch {
         /* keep url */
       }
-      throw new Error(`источник ${host} не в списке доверенных (Настройки → Источники)`);
+      throw new Error(t('источник {0} не в списке доверенных (Настройки → Источники)', host));
     }
     return this.downloads.enqueue({ url: f.url, dest, title, size: f.size, hashes: f.hashes }).done;
   }
@@ -513,7 +515,7 @@ export class Service extends EventEmitter {
    */
   async inspectPlan(planId: string): Promise<FomodPrompt[]> {
     const plan = this.plans.get(planId);
-    if (!plan) throw new Error('План устарел, постройте его заново');
+    if (!plan) throw new Error(t('План устарел, постройте его заново'));
     const profile = this.profile(plan.profileId);
     const def = this.defOf(this.game(profile.gameId));
     if (def.kind !== 'generic') return [];
@@ -536,13 +538,13 @@ export class Service extends EventEmitter {
 
   async applyPlan(planId: string, force = false, choices: Record<string, FomodChoices> = {}): Promise<{ applied: number; warnings: string[] }> {
     const plan = this.plans.get(planId);
-    if (!plan) throw new Error('План устарел, постройте его заново');
-    if (!plan.ok && !force) throw new Error('В плане есть ошибки совместимости');
+    if (!plan) throw new Error(t('План устарел, постройте его заново'));
+    if (!plan.ok && !force) throw new Error(t('В плане есть ошибки совместимости'));
     const profile = this.profile(plan.profileId);
     const game = this.game(profile.gameId);
     const def = this.defOf(game);
     const items: PlanItem[] = [...plan.install, ...plan.update];
-    const before = items.length || plan.collectionIds.length ? this.snapshot(profile.id, `Перед: ${plan.label}`) : null;
+    const before = items.length || plan.collectionIds.length ? this.snapshot(profile.id, t('Перед: {0}', plan.label)) : null;
 
     const staged = new Map<string, { path: string; files: ModFile[]; choices?: FomodChoices }>();
     const warnings: string[] = [];
@@ -552,7 +554,7 @@ export class Service extends EventEmitter {
       items.map(async (it) => {
         try {
           const files = this.primaryFiles(it.version);
-          if (files.length === 0) throw new Error('у версии нет файлов');
+          if (files.length === 0) throw new Error(t('у версии нет файлов'));
           const paths = await Promise.all(files.map((f) => this.fetchFile(f, it.title)));
           const root = this.dir('staging', game.id);
           const version = { ...it.version, files };
@@ -563,7 +565,7 @@ export class Service extends EventEmitter {
             if (!(e instanceof FomodRequired)) throw e;
             // Nobody answered the installer (scripted install): take its defaults, say so.
             res = await stageVersion(def, version, paths, root, { choices: defaultChoices(e.config, fs0?.state), fileState: fs0?.state });
-            warnings.push(`«${it.title}»: установщик FOMOD пройден с вариантами по умолчанию — их можно изменить в карточке мода`);
+            warnings.push(t('«{0}»: установщик FOMOD пройден с вариантами по умолчанию — их можно изменить в карточке мода', it.title));
           }
           forgetStaged(res.stagedPath);
           warnings.push(...res.warnings.map((w) => `«${it.title}»: ${w}`));
@@ -573,7 +575,7 @@ export class Service extends EventEmitter {
         }
       }),
     );
-    if (failures.length) throw new Error(`Не удалось установить:\n${failures.join('\n')}`);
+    if (failures.length) throw new Error(t('Не удалось установить:\n{0}', failures.join('\n')));
 
     const now = new Date().toISOString();
     const toInstalled = (it: PlanItem, old?: InstalledMod): InstalledMod => ({
@@ -614,10 +616,10 @@ export class Service extends EventEmitter {
     if (warnings.length) this.toast('info', warnings.slice(0, 3).join('\n'));
     this.toast(
       'ok',
-      items.length ? `${plan.label} — готово, изменено модов: ${items.length}` : `${plan.label} — готово`,
-      before ? { label: 'Откатить', snapshotId: before.id } : undefined,
+      items.length ? t('{0} — готово, изменено модов: {1}', plan.label, items.length) : t('{0} — готово', plan.label),
+      before ? { label: t('Откатить'), snapshotId: before.id } : undefined,
     );
-    await this.deploy(profile.id).catch((e) => this.toast('err', `Развёртывание: ${(e as Error).message}`));
+    await this.deploy(profile.id).catch((e) => this.toast('err', t('Развёртывание: {0}', (e as Error).message)));
     return { applied: items.length, warnings };
   }
 
@@ -626,7 +628,7 @@ export class Service extends EventEmitter {
   async setEnabled(profileId: string, key: string, enabled: boolean) {
     const p = this.profile(profileId);
     const m = p.mods[key];
-    if (!m) throw new Error('Мод не найден');
+    if (!m) throw new Error(t('Мод не найден'));
     m.enabled = enabled;
     this.changed();
     await this.deploy(profileId).catch(() => undefined);
@@ -675,7 +677,7 @@ export class Service extends EventEmitter {
     const plan = planRemoval(p, keys, opts);
     if (plan.dependents.length && !opts.withDependents) return { removed: [], blockedBy: plan.dependents, leftovers: [] };
     if (plan.remove.length === 0) return { removed: [], blockedBy: [], leftovers: [] };
-    this.snapshot(profileId, plan.remove.length === 1 ? `Перед удалением «${p.mods[plan.remove[0]].title}»` : `Перед удалением модов (${plan.remove.length})`);
+    this.snapshot(profileId, plan.remove.length === 1 ? t('Перед удалением «{0}»', p.mods[plan.remove[0]].title) : t('Перед удалением модов ({0})', plan.remove.length));
     const gone = [...plan.remove, ...(opts.withDeps ? plan.deps : [])].map((k) => p.mods[k]).filter(Boolean);
     applyRemoval(p, plan, opts);
     this.changed();
@@ -748,7 +750,7 @@ export class Service extends EventEmitter {
   setUserLink(profileId: string, key: string, dep: DepDecl | null, removeKey?: string) {
     const p = this.profile(profileId);
     const m = p.mods[key];
-    if (!m) throw new Error('Мод не найден');
+    if (!m) throw new Error(t('Мод не найден'));
     if (removeKey) m.deps = m.deps.filter((d) => !(d.user && keyOf(d.ref) === removeKey));
     if (dep) {
       m.deps = m.deps.filter((d) => !(d.user && keyOf(d.ref) === keyOf(dep.ref)));
@@ -785,7 +787,7 @@ export class Service extends EventEmitter {
       requests.push({ ref, versionId, title });
     }
     this.store.save();
-    return this.planInstall(profileId, requests, { label: paths.length === 1 ? `Локальный мод «${requests[0].title}»` : `Локальные моды (${paths.length})` });
+    return this.planInstall(profileId, requests, { label: paths.length === 1 ? t('Локальный мод «{0}»', requests[0].title) : t('Локальные моды ({0})', paths.length) });
   }
 
   // ---------- collections
@@ -800,13 +802,13 @@ export class Service extends EventEmitter {
 
   updateCollection(id: string, patch: Partial<Pick<Collection, 'name' | 'version' | 'description' | 'author' | 'requires' | 'conflicts'>>) {
     const c = this.store.state.collections.find((x) => x.id === id);
-    if (!c) throw new Error('Коллекция не найдена');
-    if (patch.requires?.some((l) => l.collectionId === id) || patch.conflicts?.some((l) => l.collectionId === id)) throw new Error('Коллекция не может ссылаться на саму себя');
+    if (!c) throw new Error(t('Коллекция не найдена'));
+    if (patch.requires?.some((l) => l.collectionId === id) || patch.conflicts?.some((l) => l.collectionId === id)) throw new Error(t('Коллекция не может ссылаться на саму себя'));
     Object.assign(c, patch);
     if (patch.requires) {
       for (const l of patch.requires) {
         const cyc = collectionClosure(l.collectionId, this.store.state.collections).order.some((x) => x.id === id);
-        if (cyc) throw new Error('Получилась циклическая цепочка коллекций');
+        if (cyc) throw new Error(t('Получилась циклическая цепочка коллекций'));
       }
     }
     this.changed();
@@ -815,7 +817,7 @@ export class Service extends EventEmitter {
   /** Re-locks a collection from the profile's current state (new version). */
   relockCollection(id: string, profileId: string, version: string) {
     const c = this.store.state.collections.find((x) => x.id === id);
-    if (!c) throw new Error('Коллекция не найдена');
+    if (!c) throw new Error(t('Коллекция не найдена'));
     const fresh = fromProfile(this.profile(profileId), { ...c, version }, this.store.state.collections.filter((x) => x.id !== id));
     Object.assign(c, { mods: fresh.mods, rules: fresh.rules, game: fresh.game, version, createdAt: fresh.createdAt });
     this.changed();
@@ -824,7 +826,7 @@ export class Service extends EventEmitter {
   deleteCollection(id: string) {
     const s = this.store.state;
     const users = s.collections.filter((c) => c.requires.some((r) => r.collectionId === id));
-    if (users.length) throw new Error(`На неё ссылаются: ${users.map((u) => `«${u.name}»`).join(', ')}`);
+    if (users.length) throw new Error(t('На неё ссылаются: {0}', users.map((u) => `«${u.name}»`).join(', ')));
     s.collections = s.collections.filter((c) => c.id !== id);
     for (const p of s.profiles) p.collections = p.collections.filter((x) => x !== id);
     this.changed();
@@ -832,9 +834,9 @@ export class Service extends EventEmitter {
 
   async exportCollection(id: string, file: string) {
     const c = this.store.state.collections.find((x) => x.id === id);
-    if (!c) throw new Error('Коллекция не найдена');
+    if (!c) throw new Error(t('Коллекция не найдена'));
     await fs.writeFile(file, JSON.stringify(c, null, 2));
-    this.toast('ok', `Коллекция сохранена: ${path.basename(file)}`);
+    this.toast('ok', t('Коллекция сохранена: {0}', path.basename(file)));
   }
 
   async importCollectionFile(file: string): Promise<Collection> {
@@ -849,16 +851,16 @@ export class Service extends EventEmitter {
     const s = this.store.state;
     s.collections = [...s.collections.filter((x) => x.id !== c.id), c];
     this.changed();
-    this.toast('ok', `Коллекция «${c.name}» добавлена в библиотеку`);
+    this.toast('ok', t('Коллекция «{0}» добавлена в библиотеку', c.name));
   }
 
   /** Downloads a Modrinth modpack and turns it into a collection. */
   async importModpack(ref: ModRef): Promise<Collection> {
     const versions = await this.sources.modrinth.versions(ref, { gameDefId: 'minecraft' });
     const v = versions.sort((a, b) => Date.parse(b.published) - Date.parse(a.published))[0];
-    if (!v) throw new Error('У сборки нет версий');
+    if (!v) throw new Error(t('У сборки нет версий'));
     const f = v.files.find((x) => x.primary) ?? v.files[0];
-    const file = await this.fetchFile(f, `Сборка ${v.name ?? v.version}`);
+    const file = await this.fetchFile(f, t('Сборка {0}', v.name ?? v.version));
     const c = await importMrpack(file, this.sources.modrinth, this.dir('staging', '_shared'));
     this.upsertCollection(c);
     return c;
@@ -866,7 +868,7 @@ export class Service extends EventEmitter {
 
   createProfileForCollection(collectionId: string, gameId: string): Profile {
     const c = this.store.state.collections.find((x) => x.id === collectionId);
-    if (!c) throw new Error('Коллекция не найдена');
+    if (!c) throw new Error(t('Коллекция не найдена'));
     const p = this.createProfile(gameId, c.name, { gameVersion: c.game.gameVersion, loader: c.game.loader });
     return p;
   }
@@ -874,8 +876,8 @@ export class Service extends EventEmitter {
   async removeCollectionFromProfile(profileId: string, collectionId: string): Promise<string[]> {
     const p = this.profile(profileId);
     const dependents = this.store.state.collections.filter((c) => p.collections.includes(c.id) && c.requires.some((r) => r.collectionId === collectionId));
-    if (dependents.length) throw new Error(`Сначала уберите коллекции, которые на ней строятся: ${dependents.map((d) => `«${d.name}»`).join(', ')}`);
-    this.snapshot(profileId, 'Перед удалением коллекции');
+    if (dependents.length) throw new Error(t('Сначала уберите коллекции, которые на ней строятся: {0}', dependents.map((d) => `«${d.name}»`).join(', ')));
+    this.snapshot(profileId, t('Перед удалением коллекции'));
     p.collections = p.collections.filter((x) => x !== collectionId);
     for (const m of Object.values(p.mods)) m.requiredBy = m.requiredBy.filter((r) => r !== `collection:${collectionId}`);
     const removed = collectOrphans(p);
@@ -893,9 +895,9 @@ export class Service extends EventEmitter {
   async deploy(profileId: string): Promise<DeployResult> {
     const p = this.profile(profileId);
     const game = this.game(p.gameId);
-    if (game.activeProfileId !== profileId) throw new Error('Профиль не активен');
+    if (game.activeProfileId !== profileId) throw new Error(t('Профиль не активен'));
     const st = await fs.stat(game.installPath).catch(() => null);
-    if (!st?.isDirectory()) throw new Error(`Папка игры не найдена: ${game.installPath}`);
+    if (!st?.isDirectory()) throw new Error(t('Папка игры не найдена: {0}', game.installPath));
     const { order } = computeOrder(Object.values(p.mods), p.rules);
     const res = await deploy({
       root: this.deployRoot(game),
@@ -929,25 +931,25 @@ export class Service extends EventEmitter {
     await this.deploy(p.id);
     if (def.kind === 'minecraft') {
       if (!(await isOfficialMinecraftDir(game.installPath))) {
-        throw new Error('Это папка стороннего лаунчера (Prism, MultiMC, TLauncher и т. п.): моды уже лежат в её mods/, запустите этот экземпляр в самом лаунчере.');
+        throw new Error(t('Это папка стороннего лаунчера (Prism, MultiMC, TLauncher и т. п.): моды уже лежат в её mods/, запустите этот экземпляр в самом лаунчере.'));
       }
-      if (!p.context.gameVersion) throw new Error('Укажите версию Minecraft у профиля (Настройки → профиль), чтобы поставить загрузчик под неё.');
+      if (!p.context.gameVersion) throw new Error(t('Укажите версию Minecraft у профиля (Настройки → профиль), чтобы поставить загрузчик под неё.'));
       const res = await installMinecraftLoader(game.installPath, p.context.gameVersion, p.context.loader ?? 'fabric', p.id, p.name);
       const exe = await findMinecraftLauncher();
-      if (!exe) return { note: `Профиль «${res.profileName}» добавлен в лаунчер Minecraft. Откройте лаунчер, выберите этот профиль и нажмите «Играть».` };
+      if (!exe) return { note: t('Профиль «{0}» добавлен в лаунчер Minecraft. Откройте лаунчер, выберите этот профиль и нажмите «Играть».', res.profileName) };
       await this.launcher({ kind: 'exe', path: exe });
-      return { note: `Открываем лаунчер Minecraft: выберите профиль «${res.profileName}» и нажмите «Играть».` };
+      return { note: t('Открываем лаунчер Minecraft: выберите профиль «{0}» и нажмите «Играть».', res.profileName) };
     }
     const target = await gameLaunchTarget(def, game.installPath);
     await this.launcher(target);
-    return { note: target.kind === 'steam' ? `Запускаем ${game.name} через Steam` : `Запускаем ${path.basename(target.path)}` };
+    return { note: target.kind === 'steam' ? t('Запускаем {0} через Steam', game.name) : t('Запускаем {0}', path.basename(target.path)) };
   }
 
   /** Points a game at a new folder (it was moved); the old folder is cleaned first when it still exists. */
   async setGamePath(gameId: string, installPath: string) {
     const game = this.game(gameId);
     const st = await fs.stat(installPath).catch(() => null);
-    if (!st?.isDirectory()) throw new Error('Папка не найдена');
+    if (!st?.isDirectory()) throw new Error(t('Папка не найдена'));
     if (await fs.stat(game.installPath).catch(() => null)) await this.purge(gameId).catch(() => 0);
     game.installPath = installPath;
     this.changed();
@@ -960,11 +962,11 @@ export class Service extends EventEmitter {
   async healthCheck(): Promise<HealthProblem[]> {
     const out: HealthProblem[] = [];
     if (this.store.recovered) {
-      out.push({ id: 'state-recovered', title: 'Файл настроек Lattice был повреждён', detail: 'Загружена последняя исправная копия. Проверьте, все ли игры и профили на месте.', fixable: false });
+      out.push({ id: 'state-recovered', title: t('Файл настроек Lattice был повреждён'), detail: t('Загружена последняя исправная копия. Проверьте, все ли игры и профили на месте.'), fixable: false });
     }
     for (const game of this.store.state.games) {
       if (!(await fs.stat(game.installPath).catch(() => null))?.isDirectory()) {
-        out.push({ id: `folder:${game.id}`, title: `${game.name}: папка игры не найдена`, detail: `${game.installPath} — игру переместили или удалили. Укажите новую папку в настройках.`, fixable: false, gameId: game.id });
+        out.push({ id: `folder:${game.id}`, title: t('{0}: папка игры не найдена', game.name), detail: t('{0} — игру переместили или удалили. Укажите новую папку в настройках.', game.installPath), fixable: false, gameId: game.id });
         continue;
       }
       const p = this.store.state.profiles.find((x) => x.id === game.activeProfileId);
@@ -974,8 +976,8 @@ export class Service extends EventEmitter {
       if (missing.length) {
         out.push({
           id: `staging:${p.id}`,
-          title: `${game.name}: пропали файлы модов (${missing.length})`,
-          detail: `${missing.slice(0, 4).map((m) => `«${m.title}»`).join(', ')}${missing.length > 4 ? '…' : ''}. Lattice скачает и подготовит их заново.`,
+          title: t('{0}: пропали файлы модов ({1})', game.name, missing.length),
+          detail: t('{0}{1}. Lattice скачает и подготовит их заново.', missing.slice(0, 4).map((m) => `«${m.title}»`).join(', '), missing.length > 4 ? '…' : ''),
           fixable: true,
           profileId: p.id,
           keys: missing.map((m) => m.key),
@@ -985,8 +987,8 @@ export class Service extends EventEmitter {
       if (cycles.length) {
         out.push({
           id: `cycle:${p.id}`,
-          title: `${game.name}: правила порядка загрузки противоречат друг другу`,
-          detail: cycles.map((c) => c.map((k) => `«${p.mods[k]?.title ?? k}»`).join(' → ')).join('; ') + '. Lattice уберёт противоречащие правила.',
+          title: t('{0}: правила порядка загрузки противоречат друг другу', game.name),
+          detail: cycles.map((c) => c.map((k) => `«${p.mods[k]?.title ?? k}»`).join(' → ')).join('; ') + t('. Lattice уберёт противоречащие правила.'),
           fixable: true,
           profileId: p.id,
         });
@@ -996,8 +998,8 @@ export class Service extends EventEmitter {
         if (v.missing.length) {
           out.push({
             id: `deploy:${p.id}`,
-            title: `${game.name}: в папке игры не хватает файлов модов (${v.missing.length})`,
-            detail: 'Их удалили вручную или игра обновилась. Lattice разложит их заново.',
+            title: t('{0}: в папке игры не хватает файлов модов ({1})', game.name, v.missing.length),
+            detail: t('Их удалили вручную или игра обновилась. Lattice разложит их заново.'),
             fixable: true,
             profileId: p.id,
           });
@@ -1007,7 +1009,7 @@ export class Service extends EventEmitter {
     const busy = this.downloads.list().some((d) => ['queued', 'probing', 'downloading', 'paused', 'verifying'].includes(d.state));
     const parts = busy ? [] : (await walk(this.dir('downloads')).catch(() => [] as string[])).filter((r) => r.endsWith('.part'));
     if (parts.length) {
-      out.push({ id: 'parts', title: 'Недокачанные файлы в кэше загрузок', detail: `${parts.length} шт. остались от прерванных загрузок и только занимают место.`, fixable: true });
+      out.push({ id: 'parts', title: t('Недокачанные файлы в кэше загрузок'), detail: t('{0} шт. остались от прерванных загрузок и только занимают место.', parts.length), fixable: true });
     }
     return out;
   }
@@ -1047,7 +1049,7 @@ export class Service extends EventEmitter {
       const m = p.mods[key];
       if (!m) continue;
       try {
-        if (m.files.some((f) => f.url.startsWith(STAGED_PREFIX))) throw new Error('файлы сборки можно вернуть только повторным импортом коллекции');
+        if (m.files.some((f) => f.url.startsWith(STAGED_PREFIX))) throw new Error(t('файлы сборки можно вернуть только повторным импортом коллекции'));
         const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title)));
         const res = await stageVersion(def, installedVersion(m), paths, this.dir('staging', game.id), { choices: m.choices });
         forgetStaged(res.stagedPath);
@@ -1077,7 +1079,7 @@ export class Service extends EventEmitter {
   async fomodPrompt(profileId: string, key: string): Promise<FomodPrompt | null> {
     const p = this.profile(profileId);
     const m = p.mods[key];
-    if (!m) throw new Error('Мод не найден');
+    if (!m) throw new Error(t('Мод не найден'));
     const f = m.files[0];
     if (!f || f.url.startsWith(STAGED_PREFIX)) return null;
     const file = await this.fetchFile(f, m.title);
@@ -1091,7 +1093,7 @@ export class Service extends EventEmitter {
   async reinstallWithChoices(profileId: string, key: string, choices: FomodChoices) {
     const p = this.profile(profileId);
     const m = p.mods[key];
-    if (!m) throw new Error('Мод не найден');
+    if (!m) throw new Error(t('Мод не найден'));
     const game = this.game(p.gameId);
     const def = this.defOf(game);
     const { state } = await this.fileState(p);
@@ -1100,7 +1102,7 @@ export class Service extends EventEmitter {
       const errors = validateChoices(config, choices, state);
       if (errors.length) throw new Error(errors.join('\n'));
     }
-    this.snapshot(profileId, `Перед сменой опций «${m.title}»`);
+    this.snapshot(profileId, t('Перед сменой опций «{0}»', m.title));
     const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title)));
     const version: ModVersion = { ...installedVersion(m) };
     const res = await stageVersion(def, version, paths, this.dir('staging', game.id), { choices, fileState: state });
@@ -1108,7 +1110,7 @@ export class Service extends EventEmitter {
     m.stagedPath = res.stagedPath;
     m.choices = res.choices;
     this.changed();
-    this.toast('ok', `«${m.title}» переустановлен с новыми опциями`);
+    this.toast('ok', t('«{0}» переустановлен с новыми опциями', m.title));
     if (game.activeProfileId === profileId) await this.deploy(profileId).catch((e) => this.toast('err', (e as Error).message));
   }
 
@@ -1148,12 +1150,12 @@ export class Service extends EventEmitter {
    */
   async handleNxm(url: string): Promise<InstallPlan> {
     const link = parseNxm(url);
-    if (!link) throw new Error('Не похоже на ссылку nxm://');
-    if (link.expires && link.expires * 1000 < Date.now()) throw new Error('Ссылка Nexus устарела — нажмите кнопку на сайте ещё раз');
+    if (!link) throw new Error(t('Не похоже на ссылку nxm://'));
+    if (link.expires && link.expires * 1000 < Date.now()) throw new Error(t('Ссылка Nexus устарела — нажмите кнопку на сайте ещё раз'));
     const s = this.store.state;
     const candidates = s.games.filter((g) => gameDef(g.defId)?.nexusDomain === link.domain);
     const game = candidates.find((g) => g.id === s.activeGameId) ?? candidates[0];
-    if (!game) throw new Error(`Игра ${link.domain} не добавлена в Lattice`);
+    if (!game) throw new Error(t('Игра {0} не добавлена в Lattice', link.domain));
     this.nxmKeys.set(`${link.domain}/${link.modId}/${link.fileId}`, link);
     if (s.activeGameId !== game.id) {
       s.activeGameId = game.id;
@@ -1190,19 +1192,19 @@ export class Service extends EventEmitter {
 
   async rollback(snapshotId: string) {
     const s = this.store.state.snapshots.find((x) => x.id === snapshotId);
-    if (!s) throw new Error('Снимок не найден');
+    if (!s) throw new Error(t('Снимок не найден'));
     const p = this.profile(s.profileId);
     const missing: string[] = [];
     for (const m of Object.values(s.mods)) {
       if (!(await fs.stat(m.stagedPath).catch(() => null))) missing.push(m.title);
     }
-    if (missing.length) throw new Error(`Нет файлов для: ${missing.slice(0, 5).join(', ')}. Их можно переустановить из плана.`);
-    this.snapshot(p.id, `Перед откатом к «${s.label}»`);
+    if (missing.length) throw new Error(t('Нет файлов для: {0}. Их можно переустановить из плана.', missing.slice(0, 5).join(', ')));
+    this.snapshot(p.id, t('Перед откатом к «{0}»', s.label));
     p.mods = structuredClone(s.mods);
     p.rules = structuredClone(s.rules);
     p.collections = [...s.collections];
     this.changed();
-    this.toast('ok', `Профиль возвращён к состоянию «${s.label}»`);
+    this.toast('ok', t('Профиль возвращён к состоянию «{0}»', s.label));
     const game = this.game(p.gameId);
     if (game.activeProfileId === p.id) await this.deploy(p.id).catch((e) => this.toast('err', (e as Error).message));
   }
@@ -1223,6 +1225,8 @@ export class Service extends EventEmitter {
     next.maxConnectionsPerFile = clamp(next.maxConnectionsPerFile, 1, 32);
     next.minSegmentMiB = clamp(next.minSegmentMiB, 0.25, 64);
     next.trustedHosts = [...new Set(next.trustedHosts.map((h) => h.trim().toLowerCase()).filter(Boolean))];
+    if (next.language && !LANGS.some((l) => l.id === next.language)) next.language = this.settings.language;
+    if (next.language) setLang(next.language);
     this.store.state.settings = next;
     this.changed();
   }

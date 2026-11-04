@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { GameDef } from '../../shared/types';
 import { getJson } from './http';
+import { t } from '../../shared/i18n';
 
 export type LaunchTarget = { kind: 'steam'; appId: string } | { kind: 'exe'; path: string };
 
@@ -49,12 +50,12 @@ export async function installMinecraftLoader(gameDir: string, gameVersion: strin
   const meta = LOADER_META[loader];
   if (!meta) {
     throw new Error(
-      `${loader === 'neoforge' ? 'NeoForge' : 'Forge'} ставится только своим официальным установщиком (neoforged.net / files.minecraftforge.net). Установите его, затем выберите его профиль в лаунчере Minecraft.`,
+      t('{0} ставится только своим официальным установщиком (neoforged.net / files.minecraftforge.net). Установите его, затем выберите его профиль в лаунчере Minecraft.', loader === 'neoforge' ? 'NeoForge' : 'Forge'),
     );
   }
   const list = await getJson<{ loader: { version: string; stable?: boolean } }[]>(meta.list(gameVersion), {}, 3_600_000);
   const pick = list.find((x) => x.loader.stable) ?? list.find((x) => !/beta|alpha|rc/i.test(x.loader.version)) ?? list[0];
-  if (!pick) throw new Error(`Загрузчик ${loader} не поддерживает Minecraft ${gameVersion}`);
+  if (!pick) throw new Error(t('Загрузчик {0} не поддерживает Minecraft {1}', loader, gameVersion));
   const profile = await getJson<{ id: string }>(meta.profile(gameVersion, pick.loader.version), {}, 3_600_000);
 
   const dir = path.join(gameDir, 'versions', profile.id);
@@ -115,5 +116,5 @@ export async function gameLaunchTarget(def: GameDef, installPath: string): Promi
     if (await exists(p)) return { kind: 'exe', path: p };
   }
   if (def.steamAppId) return { kind: 'steam', appId: def.steamAppId };
-  throw new Error('Не знаю, как запустить эту игру: запустите её как обычно — моды уже в её папке');
+  throw new Error(t('Не знаю, как запустить эту игру: запустите её как обычно — моды уже в её папке'));
 }

@@ -3,6 +3,7 @@
 // too — a missing one is a compatibility error, like a missing dependency.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { t } from '../../shared/i18n';
 
 export const PLUGIN_EXT = /\.(esp|esm|esl)$/i;
 
@@ -84,7 +85,7 @@ export function buildPluginsTxt(existing: PluginLine[], managed: string[], previ
   const kept = existing.filter((e) => !managedSet.has(low(e.name)) && !dropped.has(low(e.name)));
   const all: PluginLine[] = [...kept, ...managed.map((name) => ({ name, enabled: true }))];
   const ordered = [...all.filter((p) => isMasterFile(p.name)), ...all.filter((p) => !isMasterFile(p.name))];
-  return ['# Этот файл ведёт Lattice: порядок плагинов следует порядку модов и правилам «до/после».', ...ordered.map((p) => `${p.enabled ? '*' : ''}${p.name}`)].join('\r\n') + '\r\n';
+  return [t('# Этот файл ведёт Lattice: порядок плагинов следует порядку модов и правилам «до/после».'), ...ordered.map((p) => `${p.enabled ? '*' : ''}${p.name}`)].join('\r\n') + '\r\n';
 }
 
 export function pluginsTxtPath(folder: string): string {

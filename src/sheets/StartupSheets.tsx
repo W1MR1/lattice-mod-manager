@@ -4,6 +4,7 @@ import type { HealthProblem } from '../../shared/types';
 import { api, bridge, type UpdateEvent } from '../api';
 import { useUI } from '../store';
 import { Modal, Spinner } from '../components/ui';
+import { t } from '../../shared/i18n';
 
 /** Problems found at start (or on demand): fix them, or leave everything as it is. */
 export function HealthSheet({ problems, onClose }: { problems: HealthProblem[]; onClose: () => void }) {
@@ -12,14 +13,14 @@ export function HealthSheet({ problems, onClose }: { problems: HealthProblem[]; 
   const fixable = problems.filter((p) => p.fixable);
   return (
     <Modal
-      title="Lattice нашёл неполадки"
-      sub="Проверка при запуске: файлы модов, папки игр, порядок загрузки и кэш загрузок."
+      title={t("Lattice нашёл неполадки")}
+      sub={t("Проверка при запуске: файлы модов, папки игр, порядок загрузки и кэш загрузок.")}
       onClose={busy ? () => undefined : onClose}
       foot={
         <>
           <span className="grow" />
           <button className="btn ghost" disabled={busy} onClick={onClose}>
-            Оставить как есть
+            {t('Оставить как есть')}
           </button>
           {fixable.length > 0 && (
             <button
@@ -29,8 +30,8 @@ export function HealthSheet({ problems, onClose }: { problems: HealthProblem[]; 
                 setBusy(true);
                 try {
                   const r = await api.repair(fixable.map((p) => p.id));
-                  if (r.failed.length) toast('err', `Не всё удалось исправить:\n${r.failed.map((f) => f.error).join('\n')}`);
-                  else toast('ok', `Исправлено: ${r.fixed.length}`);
+                  if (r.failed.length) toast('err', t('Не всё удалось исправить:\n{0}', r.failed.map((f) => f.error).join('\n')));
+                  else toast('ok', t('Исправлено: {0}', r.fixed.length));
                   onClose();
                 } catch (e) {
                   toast('err', (e as Error).message);
@@ -39,7 +40,7 @@ export function HealthSheet({ problems, onClose }: { problems: HealthProblem[]; 
                 }
               }}
             >
-              {busy && <Spinner />} Попытаться исправить ({fixable.length})
+              {busy && <Spinner />} {t('Попытаться исправить ({0})', fixable.length)}
             </button>
           )}
         </>
@@ -54,7 +55,7 @@ export function HealthSheet({ problems, onClose }: { problems: HealthProblem[]; 
               <br />
               <span className="muted" style={{ fontSize: 'var(--fs-sm)' }}>
                 {p.detail}
-                {!p.fixable && ' Исправить это автоматически нельзя.'}
+                {!p.fixable && ` ${t('Исправить это автоматически нельзя.')}`}
               </span>
             </span>
           </div>
@@ -70,22 +71,22 @@ export function UpdateSheet({ ev, onClose }: { ev: UpdateEvent; onClose: () => v
   const act = (a: 'download' | 'install' | 'snooze') => bridge.update(a).catch((e) => toast('err', String((e as Error).message ?? e)));
   if (ev.state === 'none') {
     return (
-      <Modal title="Обновлений нет" sub="У вас последняя версия Lattice." onClose={onClose} size="sm" foot={<><span className="grow" /><button className="btn" onClick={onClose}>Хорошо</button></>}>
+      <Modal title={t("Обновлений нет")} sub={t("У вас последняя версия Lattice.")} onClose={onClose} size="sm" foot={<><span className="grow" /><button className="btn" onClick={onClose}>{t('Хорошо')}</button></>}>
         <span />
       </Modal>
     );
   }
   if (ev.state === 'error') {
     return (
-      <Modal title="Не удалось проверить обновления" sub={ev.error} onClose={onClose} size="sm" foot={<><span className="grow" /><button className="btn" onClick={onClose}>Закрыть</button></>}>
+      <Modal title={t("Не удалось проверить обновления")} sub={ev.error} onClose={onClose} size="sm" foot={<><span className="grow" /><button className="btn" onClick={onClose}>{t('Закрыть')}</button></>}>
         <span />
       </Modal>
     );
   }
   return (
     <Modal
-      title={ev.state === 'ready' ? 'Обновление скачано' : `Доступна новая версия${'version' in ev ? ` ${ev.version}` : ''}`}
-      sub={ev.state === 'ready' ? 'Lattice закроется, установит обновление и откроется снова.' : 'Новая версия есть в релизах Lattice на GitHub.'}
+      title={ev.state === 'ready' ? t('Обновление скачано') : t('Доступна новая версия{0}', 'version' in ev ? ` ${ev.version}` : '')}
+      sub={ev.state === 'ready' ? t('Lattice закроется, установит обновление и откроется снова.') : t('Новая версия есть в релизах Lattice на GitHub.')}
       onClose={ev.state === 'downloading' ? () => undefined : onClose}
       foot={
         ev.state === 'available' ? (
@@ -97,29 +98,29 @@ export function UpdateSheet({ ev, onClose }: { ev: UpdateEvent; onClose: () => v
                 onClose();
               }}
             >
-              Не предлагать 7 дней
+              {t('Не предлагать 7 дней')}
             </button>
             <span className="grow" />
             <button className="btn ghost" onClick={onClose}>
-              Позже
+              {t('Позже')}
             </button>
             <button className="btn primary" onClick={() => void act('download')}>
-              <Download size={15} /> Обновить
+              <Download size={15} /> {t('Обновить')}
             </button>
           </>
         ) : ev.state === 'downloading' ? (
           <>
-            <span className="grow muted">Скачиваем… {ev.percent}%</span>
+            <span className="grow muted">{t('Скачиваем…')} {ev.percent}%</span>
             <Spinner />
           </>
         ) : (
           <>
             <span className="grow" />
             <button className="btn ghost" onClick={onClose}>
-              При следующем запуске
+              {t('При следующем запуске')}
             </button>
             <button className="btn primary" onClick={() => void act('install')}>
-              <CircleCheck size={15} /> Перезапустить и обновить
+              <CircleCheck size={15} /> {t('Перезапустить и обновить')}
             </button>
           </>
         )
@@ -132,7 +133,7 @@ export function UpdateSheet({ ev, onClose }: { ev: UpdateEvent; onClose: () => v
       ) : (
         <span />
       )}
-      {ev.state === 'available' && <span className="faint">«Позже» — спросим снова при следующем запуске.</span>}
+      {ev.state === 'available' && <span className="faint">{t('«Позже» — спросим снова при следующем запуске.')}</span>}
     </Modal>
   );
 }

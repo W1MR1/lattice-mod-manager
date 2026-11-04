@@ -5,6 +5,7 @@ import { ago, plural } from '../format';
 import { useActive, useUI } from '../store';
 import { Empty, Modal } from '../components/ui';
 import type { Snapshot } from '../../shared/types';
+import { t } from '../../shared/i18n';
 
 function diff(s: Snapshot, current: Record<string, { versionId: string; enabled: boolean }>) {
   let added = 0;
@@ -29,15 +30,15 @@ export function Snapshots() {
     <div className="content">
       <div className="screen">
         <div className="toolbar">
-          <span className="muted">Снимок делается сам перед каждым изменением. Откат возвращает моды, версии, правила и коллекции и заново разворачивает игру.</span>
+          <span className="muted">{t('Снимок делается сам перед каждым изменением. Откат возвращает моды, версии, правила и коллекции и заново разворачивает игру.')}</span>
           <span className="grow" />
-          <button className="btn" onClick={() => run(() => api.snapshot(profile.id, 'Снимок вручную'), 'Снимок сохранён')}>
-            <Camera size={15} /> Сделать снимок
+          <button className="btn" onClick={() => run(() => api.snapshot(profile.id, t('Снимок вручную')), t('Снимок сохранён'))}>
+            <Camera size={15} /> {t('Сделать снимок')}
           </button>
         </div>
         <div className="screen-scroll">
           {list.length === 0 ? (
-            <Empty icon={<History size={32} color="var(--text-3)" />} title="Снимков пока нет" text="Они появятся при первой установке, обновлении или удалении." />
+            <Empty icon={<History size={32} color="var(--text-3)" />} title={t("Снимков пока нет")} text={t("Они появятся при первой установке, обновлении или удалении.")} />
           ) : (
             <div className="timeline">
               {list.map((s) => {
@@ -54,12 +55,12 @@ export function Snapshots() {
                       </span>
                     </div>
                     <span className="muted mono" style={{ fontSize: 'var(--fs-sm)' }}>
-                      {same ? 'совпадает с текущим' : `сейчас: +${d.added} −${d.removed} ~${d.changed}`}
+                      {same ? t('совпадает с текущим') : t('сейчас: +{0} −{1} ~{2}', d.added, d.removed, d.changed)}
                     </span>
                     <button className="btn sm" disabled={same} onClick={() => setConfirm(s)}>
-                      <Undo2 size={13} /> Откатить
+                      <Undo2 size={13} /> {t('Откатить')}
                     </button>
-                    <button className="btn sm ghost icon" aria-label="Удалить снимок" onClick={() => run(() => api.deleteSnapshot(s.id))}>
+                    <button className="btn sm ghost icon" aria-label={t("Удалить снимок")} onClick={() => run(() => api.deleteSnapshot(s.id))}>
                       <Trash2 size={13} />
                     </button>
                   </div>
@@ -71,15 +72,15 @@ export function Snapshots() {
       </div>
       {confirm && (
         <Modal
-          title="Откатить профиль?"
-          sub={`К состоянию «${confirm.label}» (${ago(confirm.createdAt)}). Текущее состояние сохранится отдельным снимком.`}
+          title={t("Откатить профиль?")}
+          sub={t('К состоянию «{0}» ({1}). Текущее состояние сохранится отдельным снимком.', confirm.label, ago(confirm.createdAt))}
           size="sm"
           onClose={() => setConfirm(null)}
           foot={
             <>
               <span className="grow" />
               <button className="btn ghost" onClick={() => setConfirm(null)}>
-                Отмена
+                {t('Отмена')}
               </button>
               <button
                 className="btn primary"
@@ -88,7 +89,7 @@ export function Snapshots() {
                   setConfirm(null);
                 }}
               >
-                Откатить
+                {t('Откатить')}
               </button>
             </>
           }

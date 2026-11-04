@@ -8,6 +8,7 @@ import { HttpError } from '../http';
 import { USER_AGENT } from '../downloader';
 import type { SourceAdapter } from './types';
 import { APP_NAME, APP_VERSION } from '../app-info';
+import { t } from '../../../shared/i18n';
 
 const GQL = 'https://api.nexusmods.com/v2/graphql';
 const V1 = 'https://api.nexusmods.com/v1';
@@ -86,7 +87,7 @@ export class NexusSource implements SourceAdapter {
 
   private async v1<T>(pathname: string): Promise<T> {
     const key = this.apiKey();
-    if (!key) throw new Error('Добавьте личный API-ключ Nexus в настройках, чтобы скачивать оттуда файлы');
+    if (!key) throw new Error(t('Добавьте личный API-ключ Nexus в настройках, чтобы скачивать оттуда файлы'));
     const res = await fetch(`${V1}${pathname}`, {
       headers: { apikey: key, 'User-Agent': USER_AGENT, 'Application-Name': APP_NAME, 'Application-Version': APP_VERSION, Accept: 'application/json' },
     });
@@ -99,7 +100,7 @@ export class NexusSource implements SourceAdapter {
 
   private domain(ctx: GameContext): string {
     const d = this.domainOf(ctx.gameDefId);
-    if (!d) throw new Error('Для этой игры Nexus Mods не подключён');
+    if (!d) throw new Error(t('Для этой игры Nexus Mods не подключён'));
     return d;
   }
 
@@ -193,12 +194,12 @@ export class NexusSource implements SourceAdapter {
     const q = nxm?.key && nxm.expires ? `?key=${encodeURIComponent(nxm.key)}&expires=${nxm.expires}` : '';
     try {
       const links = await this.v1<{ URI: string; short_name: string }[]>(`/games/${domain}/mods/${modId}/files/${fileId}/download_link.json${q}`);
-      if (!links[0]?.URI) throw new Error('Nexus не вернул ссылку на файл');
+      if (!links[0]?.URI) throw new Error(t('Nexus не вернул ссылку на файл'));
       return links[0].URI;
     } catch (e) {
       if (e instanceof HttpError && e.status === 403 && !q) {
         throw new Error(
-          `Без Premium Nexus выдаёт файлы только через кнопку «Mod Manager Download» на сайте. Откройте https://www.nexusmods.com/${domain}/mods/${modId}?tab=files и нажмите её — ссылка nxm:// откроется в Lattice.`,
+          t('Без Premium Nexus выдаёт файлы только через кнопку «Mod Manager Download» на сайте. Откройте https://www.nexusmods.com/{0}/mods/{1}?tab=files и нажмите её — ссылка nxm:// откроется в Lattice.', domain, modId),
         );
       }
       throw e;
@@ -209,7 +210,7 @@ export class NexusSource implements SourceAdapter {
     const res = await fetch(`${V1}/users/validate.json`, {
       headers: { apikey: key, 'User-Agent': USER_AGENT, 'Application-Name': APP_NAME, 'Application-Version': APP_VERSION },
     });
-    if (!res.ok) throw new Error(res.status === 401 ? 'Nexus не принял ключ' : `Nexus: ${res.status}`);
+    if (!res.ok) throw new Error(res.status === 401 ? t('Nexus не принял ключ') : `Nexus: ${res.status}`);
     const u = (await res.json()) as { name: string; is_premium: boolean };
     return { name: u.name, premium: !!u.is_premium };
   }

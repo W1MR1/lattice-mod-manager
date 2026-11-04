@@ -9,6 +9,7 @@ import { useActive, useUI } from '../store';
 import { Empty, ModIcon, SevIcon, StatusChip, Switch, sevTone } from '../components/ui';
 import { CollectionSheet } from '../sheets/CollectionSheet';
 import { RemoveSheet } from '../sheets/RemoveSheet';
+import { t } from '../../shared/i18n';
 
 type Filter = 'all' | 'issues' | 'off' | 'deps';
 
@@ -17,25 +18,25 @@ export function issuesFor(report: CompatReport | null, key: string): Issue[] {
 }
 
 export function ModStatus({ m, report }: { m: InstalledMod; report: CompatReport | null }) {
-  if (!m.enabled) return <StatusChip tone="muted">Выключен</StatusChip>;
+  if (!m.enabled) return <StatusChip tone="muted">{t('Выключен')}</StatusChip>;
   const own = issuesFor(report, m.key).filter((i) => i.severity !== 'info');
   const worst = own.find((i) => i.severity === 'error') ?? own[0];
-  if (!worst) return <StatusChip tone="ok">Совместим</StatusChip>;
+  if (!worst) return <StatusChip tone="ok">{t('Совместим')}</StatusChip>;
   const word: Record<string, string> = {
-    'missing-dep': 'Нет зависимости',
-    'disabled-dep': 'Зависимость выкл.',
-    'version-mismatch': 'Не та версия',
-    conflict: 'Конфликт',
-    cycle: 'Цикл порядка',
-    'incompatible-game': 'Не для этой версии',
-    'incompatible-loader': 'Другой загрузчик',
-    'file-conflict': 'Перезапись файлов',
-    'missing-master': 'Нет мастер-файла',
-    duplicate: 'Дубликат',
+    'missing-dep': t('Нет зависимости'),
+    'disabled-dep': t('Зависимость выкл.'),
+    'version-mismatch': t('Не та версия'),
+    conflict: t('Конфликт'),
+    cycle: t('Цикл порядка'),
+    'incompatible-game': t('Не для этой версии'),
+    'incompatible-loader': t('Другой загрузчик'),
+    'file-conflict': t('Перезапись файлов'),
+    'missing-master': t('Нет мастер-файла'),
+    duplicate: t('Дубликат'),
   };
   return (
     <StatusChip tone={sevTone(worst.severity)} title={worst.message}>
-      {word[worst.code] ?? 'Проблема'}
+      {word[worst.code] ?? t('Проблема')}
     </StatusChip>
   );
 }
@@ -104,15 +105,15 @@ export function Mods() {
         <div className="toolbar">
           <div className="search" style={{ width: 260 }}>
             <Search size={15} />
-            <input className="input" placeholder="Найти в профиле" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по модам профиля" />
+            <input className="input" placeholder={t("Найти в профиле")} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t("Поиск по модам профиля")} />
           </div>
-          <div className="seg" role="group" aria-label="Фильтр">
+          <div className="seg" role="group" aria-label={t("Фильтр")}>
             {(
               [
-                ['all', 'Все'],
-                ['issues', 'С проблемами'],
-                ['deps', 'Зависимости'],
-                ['off', 'Выключенные'],
+                ['all', t('Все')],
+                ['issues', t('С проблемами')],
+                ['deps', t('Зависимости')],
+                ['off', t('Выключенные')],
               ] as [Filter, string][]
             ).map(([id, label]) => (
               <button key={id} aria-pressed={filter === id} onClick={() => setFilter(id)}>
@@ -121,39 +122,39 @@ export function Mods() {
             ))}
           </div>
           <span className="grow" />
-          <button className="btn" disabled={total === 0} onClick={() => openPlan('Безопасное обновление модов', () => api.planUpdates(profile.id))} title="Обновит только то, что не ломает связи">
-            <RefreshCw size={15} /> Обновить безопасно
+          <button className="btn" disabled={total === 0} onClick={() => openPlan(t('Безопасное обновление модов'), () => api.planUpdates(profile.id))} title={t("Обновит только то, что не ломает связи")}>
+            <RefreshCw size={15} /> {t('Обновить безопасно')}
           </button>
           <button
             className="btn"
             onClick={async () => {
               const files = await bridge.dialog('files');
-              if (files?.length) await openPlan('Локальный мод', () => api.importLocal(profile.id, files));
+              if (files?.length) await openPlan(t('Локальный мод'), () => api.importLocal(profile.id, files));
             }}
           >
-            <FolderPlus size={15} /> Локальный мод
+            <FolderPlus size={15} /> {t('Локальный мод')}
           </button>
           <button className="btn" disabled={total === 0} onClick={() => setCollSheet(true)}>
-            <Library size={15} /> В коллекцию
+            <Library size={15} /> {t('В коллекцию')}
           </button>
           {checked.size > 0 ? (
             <>
               <button className="btn danger" onClick={() => setRemoving({ keys: [...checked] })}>
-                <Trash2 size={15} /> Удалить выбранные ({checked.size})
+                <Trash2 size={15} /> {t('Удалить выбранные ({0})', checked.size)}
               </button>
               <button className="btn ghost" onClick={() => setChecked(new Set())}>
-                Снять выбор
+                {t('Снять выбор')}
               </button>
             </>
           ) : (
             <button className="btn ghost danger" disabled={total === 0} onClick={() => setRemoving({ keys: Object.keys(profile.mods), all: true })}>
-              <Trash2 size={15} /> Удалить все…
+              <Trash2 size={15} /> {t('Удалить все…')}
             </button>
           )}
         </div>
 
         {top.length > 0 && (
-          <div className="issues-strip" role="list" aria-label="Проблемы совместимости">
+          <div className="issues-strip" role="list" aria-label={t("Проблемы совместимости")}>
             {top.map((i) => (
               <div className="issue-row" role="listitem" key={i.id}>
                 <SevIcon s={i.severity} />
@@ -167,7 +168,7 @@ export function Mods() {
             ))}
             {(report?.issues.length ?? 0) > top.length && (
               <button className="issue-row btn ghost" style={{ justifyContent: 'flex-start', borderRadius: 0 }} onClick={() => go('graph')}>
-                Все проблемы и граф связей <ArrowUpRight size={14} />
+                {t('Все проблемы и граф связей')} <ArrowUpRight size={14} />
               </button>
             )}
           </div>
@@ -176,11 +177,11 @@ export function Mods() {
         {total === 0 ? (
           <Empty
             icon={<Layers size={32} color="var(--text-3)" />}
-            title="В профиле пока нет модов"
-            text="Найдите моды в обзоре — Lattice сам подтянет зависимости и проверит, что всё совместимо с этой версией игры."
+            title={t("В профиле пока нет модов")}
+            text={t("Найдите моды в обзоре — Lattice сам подтянет зависимости и проверит, что всё совместимо с этой версией игры.")}
             action={
               <button className="btn primary" onClick={() => go('discover')}>
-                Открыть обзор
+                {t('Открыть обзор')}
               </button>
             }
           />
@@ -192,19 +193,19 @@ export function Mods() {
                   <th style={{ width: 32 }}>
                     <input
                       type="checkbox"
-                      aria-label="Выбрать все моды в списке"
+                      aria-label={t("Выбрать все моды в списке")}
                       checked={mods.length > 0 && mods.every((m) => checked.has(m.key))}
                       onChange={(e) => setChecked(e.target.checked ? new Set([...checked, ...mods.map((m) => m.key)]) : new Set([...checked].filter((k) => !mods.some((m) => m.key === k))))}
                     />
                   </th>
                   <th style={{ width: 44 }}>
-                    <span className="sr-only">Включён</span>
+                    <span className="sr-only">{t('Включён')}</span>
                   </th>
-                  <th>Мод</th>
-                  <th>Версия</th>
-                  <th>Источник</th>
-                  <th>Связи</th>
-                  <th>Статус</th>
+                  <th>{t('Мод')}</th>
+                  <th>{t('Версия')}</th>
+                  <th>{t('Источник')}</th>
+                  <th>{t('Связи')}</th>
+                  <th>{t('Статус')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -227,7 +228,7 @@ export function Mods() {
                 ))}
               </tbody>
             </table>
-            {mods.length === 0 && <p className="muted" style={{ padding: 16 }}>Под фильтр ничего не подходит.</p>}
+            {mods.length === 0 && <p className="muted" style={{ padding: 16 }}>{t('Под фильтр ничего не подходит.')}</p>}
           </div>
         )}
       </div>
@@ -273,10 +274,10 @@ function ModRow({
   return (
     <tr aria-selected={selected} className={m.enabled ? '' : 'disabled'} onClick={onSelect}>
       <td onClick={(e) => e.stopPropagation()}>
-        <input type="checkbox" checked={checked} aria-label={`Выбрать «${m.title}»`} onChange={(e) => onCheck(e.target.checked)} />
+        <input type="checkbox" checked={checked} aria-label={t('Выбрать «{0}»', m.title)} onChange={(e) => onCheck(e.target.checked)} />
       </td>
       <td>
-        <Switch on={m.enabled} label={`Включить «${m.title}»`} onChange={(v) => run(() => api.setEnabled(profile.id, m.key, v))} />
+        <Switch on={m.enabled} label={t('Включить «{0}»', m.title)} onChange={(v) => run(() => api.setEnabled(profile.id, m.key, v))} />
       </td>
       <td style={{ maxWidth: 360 }}>
         <div className="mod-cell">
@@ -284,7 +285,7 @@ function ModRow({
           <div className="mod-name">
             <b className="ellipsis">{m.title}</b>
             <small className="ellipsis">
-              {m.reason === 'dependency' ? 'зависимость' : m.reason === 'collection' ? 'из коллекции' : (m.author ?? 'установлен вами')}
+              {m.reason === 'dependency' ? t('зависимость') : m.reason === 'collection' ? t('из коллекции') : (m.author ?? t('установлен вами'))}
             </small>
           </div>
         </div>
@@ -295,16 +296,16 @@ function ModRow({
       </td>
       <td>
         <span className="links">
-          <span className={`link-pill ${broken ? 'broken' : requires ? '' : 'zero'}`} title={`Требует: ${requires}`}>
+          <span className={`link-pill ${broken ? 'broken' : requires ? '' : 'zero'}`} title={t('Требует: {0}', requires)}>
             <CornerDownRight size={12} />
             {requires}
           </span>
-          <span className={`link-pill ${dependents ? '' : 'zero'}`} title={`Нужен для: ${dependents}`}>
+          <span className={`link-pill ${dependents ? '' : 'zero'}`} title={t('Нужен для: {0}', dependents)}>
             <CornerLeftUp size={12} />
             {dependents}
           </span>
           {inColl > 0 && (
-            <span className="link-pill" title="Входит в коллекции">
+            <span className="link-pill" title={t("Входит в коллекции")}>
               <Library size={12} />
               {inColl}
             </span>
@@ -333,16 +334,16 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
   const own = report?.issues.filter((i) => i.subject === m.key || i.related.includes(m.key)) ?? [];
   const dependents = report?.dependents[m.key] ?? [];
   const groups = [
-    { label: 'Требует', kinds: ['requires'] },
-    { label: 'Рекомендует', kinds: ['recommends', 'optional'] },
-    { label: 'Несовместим с', kinds: ['conflicts'] },
+    { label: t('Требует'), kinds: ['requires'] },
+    { label: t('Рекомендует'), kinds: ['recommends', 'optional'] },
+    { label: t('Несовместим с'), kinds: ['conflicts'] },
   ];
   const collections = m.requiredBy.filter((r) => r.startsWith('collection:')).map((r) => state?.collections.find((c) => c.id === r.slice(11))?.name ?? r.slice(11));
   const rules = profile.rules.filter((r) => r.subject === m.key || r.other === m.key);
   const others = Object.values(profile.mods).filter((x) => x.key !== m.key);
 
   return (
-    <aside className="inspector" aria-label={`Мод ${m.title}`}>
+    <aside className="inspector" aria-label={t('Мод {0}', m.title)}>
       <div className="inspector-head">
         <ModIcon url={m.iconUrl} title={m.title} size="lg" />
         <div className="grow" style={{ minWidth: 0 }}>
@@ -365,7 +366,7 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
                 </span>
                 {i.fix && (
                   <button className="btn sm" onClick={() => runFix(profile.id, i.fix!)}>
-                    Исправить
+                    {t('Исправить')}
                   </button>
                 )}
               </div>
@@ -375,31 +376,31 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
 
         {groups.map((g) => {
           const deps = m.deps.filter((d) => g.kinds.includes(d.kind));
-          if (deps.length === 0 && g.label !== 'Требует') return null;
+          if (deps.length === 0 && g.label !== t('Требует')) return null;
           return (
             <div className="col" key={g.label}>
               <span className="label">
                 {g.label} · {deps.length}
               </span>
               {deps.length === 0 ? (
-                <span className="faint">Ничего — мод самодостаточен.</span>
+                <span className="faint">{t('Ничего — мод самодостаточен.')}</span>
               ) : (
                 <div className="link-list">
                   {deps.map((d) => {
                     const k = keyOf(d.ref);
                     const target = profile.mods[k];
                     const tone = d.kind === 'conflicts' ? (target?.enabled ? 'err' : 'ok') : target ? (target.enabled ? 'ok' : 'warn') : d.kind === 'requires' ? 'err' : 'muted';
-                    const word = d.kind === 'conflicts' ? (target?.enabled ? 'Включён' : 'Нет') : target ? (target.enabled ? 'Есть' : 'Выключен') : 'Нет';
+                    const word = d.kind === 'conflicts' ? (target?.enabled ? t('Включён') : t('Нет')) : target ? (target.enabled ? t('Есть') : t('Выключен')) : t('Нет');
                     return (
                       <div className="link-item" key={k + d.kind}>
-                        <span className="grow ellipsis" onClick={() => target && select(k)} title={target ? 'Перейти' : undefined}>
+                        <span className="grow ellipsis" onClick={() => target && select(k)} title={target ? t('Перейти') : undefined}>
                           {target?.title ?? d.name ?? d.ref.projectId}
                           {d.range && <span className="mono faint"> {d.range}</span>}
-                          {d.user && <span className="faint"> · вручную</span>}
+                          {d.user && <span className="faint"> · {t('вручную')}</span>}
                         </span>
                         <StatusChip tone={tone}>{word}</StatusChip>
                         {d.user && (
-                          <button className="btn ghost sm icon" aria-label="Убрать связь" onClick={() => run(() => api.setUserLink(profile.id, m.key, null, k))}>
+                          <button className="btn ghost sm icon" aria-label={t("Убрать связь")} onClick={() => run(() => api.setUserLink(profile.id, m.key, null, k))}>
                             <Trash2 size={13} />
                           </button>
                         )}
@@ -413,9 +414,9 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
         })}
 
         <div className="col">
-          <span className="label">Нужен для · {dependents.length}</span>
+          <span className="label">{t('Нужен для ·')} {dependents.length}</span>
           {dependents.length === 0 ? (
-            <span className="faint">{m.reason === 'dependency' ? 'Больше никому не нужен — удалится при очистке.' : 'Ни один мод на него не опирается.'}</span>
+            <span className="faint">{m.reason === 'dependency' ? t('Больше никому не нужен — удалится при очистке.') : t('Ни один мод на него не опирается.')}</span>
           ) : (
             <div className="link-list">
               {dependents.map((k) => (
@@ -427,28 +428,28 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
               ))}
             </div>
           )}
-          {collections.length > 0 && <span className="muted">Входит в коллекции: {collections.map((c) => `«${c}»`).join(', ')}</span>}
+          {collections.length > 0 && <span className="muted">{t('Входит в коллекции:')} {collections.map((c) => `«${c}»`).join(', ')}</span>}
         </div>
 
         <div className="col">
-          <span className="label">Порядок загрузки</span>
+          <span className="label">{t('Порядок загрузки')}</span>
           {rules.map((r) => (
             <div className="link-item" key={`${r.subject}${r.kind}${r.other}`}>
               <span className="grow ellipsis">
-                «{title(r.subject)}» {r.kind === 'after' ? 'после' : 'до'} «{title(r.other)}»
+                {r.kind === 'after' ? t('«{0}» после «{1}»', title(r.subject), title(r.other)) : t('«{0}» до «{1}»', title(r.subject), title(r.other))}
               </span>
-              <button className="btn ghost sm icon" aria-label="Удалить правило" onClick={() => run(() => api.removeRule(profile.id, r))}>
+              <button className="btn ghost sm icon" aria-label={t("Удалить правило")} onClick={() => run(() => api.removeRule(profile.id, r))}>
                 <Trash2 size={13} />
               </button>
             </div>
           ))}
           <div className="row">
-            <select className="select" style={{ width: 90 }} value={ruleKind} onChange={(e) => setRuleKind(e.target.value as 'after' | 'before')} aria-label="Тип правила">
-              <option value="after">после</option>
-              <option value="before">до</option>
+            <select className="select" style={{ width: 90 }} value={ruleKind} onChange={(e) => setRuleKind(e.target.value as 'after' | 'before')} aria-label={t("Тип правила")}>
+              <option value="after">{t('после')}</option>
+              <option value="before">{t('до')}</option>
             </select>
-            <select className="select grow" value={ruleOther} onChange={(e) => setRuleOther(e.target.value)} aria-label="Другой мод">
-              <option value="">выберите мод…</option>
+            <select className="select grow" value={ruleOther} onChange={(e) => setRuleOther(e.target.value)} aria-label={t("Другой мод")}>
+              <option value="">{t('выберите мод…')}</option>
               {others.map((o) => (
                 <option key={o.key} value={o.key}>
                   {o.title}
@@ -463,23 +464,23 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
                 setRuleOther('');
               }}
             >
-              Добавить
+              {t('Добавить')}
             </button>
           </div>
         </div>
 
         <div className="col">
-          <span className="label">Своя связь</span>
+          <span className="label">{t('Своя связь')}</span>
           <span className="faint" style={{ fontSize: 'var(--fs-sm)' }}>
-            Если источник не указал зависимость — задайте её сами. Связь сохранится при обновлениях.
+            {t('Если источник не указал зависимость — задайте её сами. Связь сохранится при обновлениях.')}
           </span>
           <div className="row">
-            <select className="select" style={{ width: 120 }} value={linkKind} onChange={(e) => setLinkKind(e.target.value as 'requires' | 'conflicts')} aria-label="Тип связи">
-              <option value="requires">требует</option>
-              <option value="conflicts">конфликтует</option>
+            <select className="select" style={{ width: 120 }} value={linkKind} onChange={(e) => setLinkKind(e.target.value as 'requires' | 'conflicts')} aria-label={t("Тип связи")}>
+              <option value="requires">{t('требует')}</option>
+              <option value="conflicts">{t('конфликтует')}</option>
             </select>
-            <select className="select grow" value={linkOther} onChange={(e) => setLinkOther(e.target.value)} aria-label="Мод для связи">
-              <option value="">выберите мод…</option>
+            <select className="select grow" value={linkOther} onChange={(e) => setLinkOther(e.target.value)} aria-label={t("Мод для связи")}>
+              <option value="">{t('выберите мод…')}</option>
               {others.map((o) => (
                 <option key={o.key} value={o.key}>
                   {o.title}
@@ -501,42 +502,42 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
         </div>
 
         <dl className="kv">
-          <dt>Версии игры</dt>
-          <dd className="mono">{m.gameVersions.length ? m.gameVersions.slice(-6).join(', ') : 'не указаны'}</dd>
-          <dt>Загрузчики</dt>
+          <dt>{t('Версии игры')}</dt>
+          <dd className="mono">{m.gameVersions.length ? m.gameVersions.slice(-6).join(', ') : t('не указаны')}</dd>
+          <dt>{t('Загрузчики')}</dt>
           <dd>{m.loaders.length ? m.loaders.join(', ') : '—'}</dd>
-          <dt>Установлен</dt>
+          <dt>{t('Установлен')}</dt>
           <dd>{ago(m.installedAt)}</dd>
-          <dt>Причина</dt>
-          <dd>{m.reason === 'explicit' ? 'вы выбрали' : m.reason === 'dependency' ? 'зависимость' : 'коллекция'}</dd>
+          <dt>{t('Причина')}</dt>
+          <dd>{m.reason === 'explicit' ? t('вы выбрали') : m.reason === 'dependency' ? t('зависимость') : t('коллекция')}</dd>
           <dt>ID</dt>
           <dd className="mono">{m.ref.projectId}</dd>
         </dl>
       </div>
       <div className="inspector-foot">
         {m.ref.source !== 'local' && (
-          <button className="btn" onClick={() => openPlan(`Обновление «${m.title}»`, () => api.planUpdates(profile.id, [m.key]))}>
-            <RefreshCw size={14} /> Обновить
+          <button className="btn" onClick={() => openPlan(t('Обновление «{0}»', m.title), () => api.planUpdates(profile.id, [m.key]))}>
+            <RefreshCw size={14} /> {t('Обновить')}
           </button>
         )}
         <button className="btn" onClick={() => run(() => api.setEnabled(profile.id, m.key, !m.enabled))}>
-          {m.enabled ? 'Выключить' : 'Включить'}
+          {m.enabled ? t('Выключить') : t('Включить')}
         </button>
         {m.choices && (
           <button
             className="btn"
-            title="Пройти установщик FOMOD заново"
+            title={t("Пройти установщик FOMOD заново")}
             onClick={async () => {
               const p = await run(() => api.fomodPrompt(profile.id, m.key));
               if (p) setFomod(p);
             }}
           >
-            <Puzzle size={14} /> Опции
+            <Puzzle size={14} /> {t('Опции')}
           </button>
         )}
         <span className="grow" />
         <button className="btn danger" onClick={onRemove}>
-          <Trash2 size={14} /> Удалить
+          <Trash2 size={14} /> {t('Удалить')}
         </button>
       </div>
       {fomod && (

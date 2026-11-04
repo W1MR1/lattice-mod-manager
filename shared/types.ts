@@ -1,5 +1,6 @@
 // Types shared by the Electron main process and the renderer.
 import type { FomodChoices, FomodConfig } from './fomod';
+import type { Lang } from './i18n';
 
 export type SourceId = 'modrinth' | 'thunderstore' | 'github' | 'nexus' | 'local';
 
@@ -349,6 +350,8 @@ export interface Settings {
   handleNxm: boolean;
   /** "don't offer for 7 days": no update prompt before this time (ms) */
   updateSnoozedUntil?: number;
+  /** interface language; chosen in the installer, changeable in Settings */
+  language?: Lang;
 }
 
 export interface AppState {

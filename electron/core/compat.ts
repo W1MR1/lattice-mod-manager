@@ -5,6 +5,7 @@ import { keyOf } from '../../shared/types';
 import { gameVersionFits, loaderFits } from '../../shared/context';
 import { satisfies } from '../../shared/versions';
 import { computeOrder, providerIndex } from './loadorder';
+import { t } from '../../shared/i18n';
 
 export interface FileOverlap {
   path: string;
@@ -50,8 +51,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
         code: 'incompatible-game',
         subject: m.key,
         related: [],
-        message: `«${m.title}» ${m.version} не поддерживает версию игры ${ctx.gameVersion}.`,
-        fix: { kind: 'update', label: 'Подобрать совместимую версию', key: m.key, ref: m.ref },
+        message: t('«{0}» {1} не поддерживает версию игры {2}.', m.title, m.version, ctx.gameVersion),
+        fix: { kind: 'update', label: t('Подобрать совместимую версию'), key: m.key, ref: m.ref },
       });
     }
     if (!loaderFits(m.loaders, ctx.loader)) {
@@ -60,8 +61,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
         code: 'incompatible-loader',
         subject: m.key,
         related: [],
-        message: `«${m.title}» собран для ${m.loaders.join(', ')}, а профиль использует ${ctx.loader}.`,
-        fix: { kind: 'update', label: 'Подобрать версию под загрузчик', key: m.key, ref: m.ref },
+        message: t('«{0}» собран для {1}, а профиль использует {2}.', m.title, m.loaders.join(', '), ctx.loader),
+        fix: { kind: 'update', label: t('Подобрать версию под загрузчик'), key: m.key, ref: m.ref },
       });
     }
 
@@ -80,8 +81,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
               code: 'disabled-dep',
               subject: m.key,
               related: [off[0].key],
-              message: `«${m.title}» требует «${off[0].title}», но он выключен.`,
-              fix: { kind: 'enable', label: `Включить «${off[0].title}»`, key: off[0].key },
+              message: t('«{0}» требует «{1}», но он выключен.', m.title, off[0].title),
+              fix: { kind: 'enable', label: t('Включить «{0}»', off[0].title), key: off[0].key },
             });
           } else {
             push({
@@ -89,8 +90,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
               code: 'missing-dep',
               subject: m.key,
               related: [depKey],
-              message: `«${m.title}» требует «${depName}», но он не установлен.`,
-              fix: { kind: 'install', label: `Установить «${depName}»`, ref: d.ref, versionId: d.versionId },
+              message: t('«{0}» требует «{1}», но он не установлен.', m.title, depName),
+              fix: { kind: 'install', label: t('Установить «{0}»', depName), ref: d.ref, versionId: d.versionId },
             });
           }
           continue;
@@ -102,8 +103,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
             code: 'version-mismatch',
             subject: m.key,
             related: [exact.key],
-            message: `«${m.title}» требует «${exact.title}» ${d.range}, установлена ${exact.version}.`,
-            fix: { kind: 'update', label: `Обновить «${exact.title}»`, key: exact.key, ref: exact.ref },
+            message: t('«{0}» требует «{1}» {2}, установлена {3}.', m.title, exact.title, d.range, exact.version),
+            fix: { kind: 'update', label: t('Обновить «{0}»', exact.title), key: exact.key, ref: exact.ref },
           });
         }
       } else if (d.kind === 'recommends') {
@@ -114,8 +115,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
             code: 'recommended',
             subject: m.key,
             related: [depKey],
-            message: `«${m.title}» рекомендует «${depName}».`,
-            fix: { kind: 'install', label: `Установить «${depName}»`, ref: d.ref, versionId: d.versionId },
+            message: t('«{0}» рекомендует «{1}».', m.title, depName),
+            fix: { kind: 'install', label: t('Установить «{0}»', depName), ref: d.ref, versionId: d.versionId },
           });
         }
       } else if (d.kind === 'conflicts') {
@@ -126,8 +127,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
             code: 'conflict',
             subject: m.key,
             related: [p.key],
-            message: `«${m.title}» несовместим с «${p.title}».`,
-            fix: { kind: 'disable', label: `Выключить «${p.title}»`, key: p.key },
+            message: t('«{0}» несовместим с «{1}».', m.title, p.title),
+            fix: { kind: 'disable', label: t('Выключить «{0}»', p.title), key: p.key },
           });
         }
       }
@@ -145,9 +146,9 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
           code: 'collection-missing',
           subject: `collection:${c.id}`,
           related: [`collection:${link.collectionId}`],
-          message: `Коллекция «${c.name}» строится поверх «${link.name ?? link.collectionId}», но та не применена.`,
+          message: t('Коллекция «{0}» строится поверх «{1}», но та не применена.', c.name, link.name ?? link.collectionId),
           fix: collections.some((x) => x.id === link.collectionId)
-            ? { kind: 'apply-collection', label: `Применить «${link.name ?? link.collectionId}»`, collectionId: link.collectionId }
+            ? { kind: 'apply-collection', label: t('Применить «{0}»', link.name ?? link.collectionId), collectionId: link.collectionId }
             : undefined,
         });
       } else if (link.range && !satisfies(target.version, link.range)) {
@@ -156,7 +157,7 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
           code: 'collection-missing',
           subject: `collection:${c.id}`,
           related: [`collection:${target.id}`],
-          message: `«${c.name}» ожидает «${target.name}» ${link.range}, применена ${target.version}.`,
+          message: t('«{0}» ожидает «{1}» {2}, применена {3}.', c.name, target.name, link.range, target.version),
         });
       }
     }
@@ -167,7 +168,7 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
         code: 'collection-conflict',
         subject: `collection:${c.id}`,
         related: [`collection:${link.collectionId}`],
-        message: `Коллекции «${c.name}» и «${applied.get(link.collectionId)!.name}» несовместимы${link.reason ? `: ${link.reason}` : ''}.`,
+        message: t('Коллекции «{0}» и «{1}» несовместимы{2}.', c.name, applied.get(link.collectionId)!.name, link.reason ? `: ${link.reason}` : ''),
       });
     }
   }
@@ -179,7 +180,7 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
       code: 'cycle',
       subject: cyc[0],
       related: cyc.slice(1),
-      message: `Циклический порядок загрузки: ${cyc.map((k) => `«${title(k)}»`).join(' → ')}.`,
+      message: t('Циклический порядок загрузки: {0}.', cyc.map((k) => `«${title(k)}»`).join(' → ')),
     });
   }
 
@@ -195,7 +196,7 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
           code: 'missing-master',
           subject: p.owner,
           related: [],
-          message: `Плагин ${p.name} из «${title(p.owner)}» требует мастер-файл ${m}, а его нет ни в модах, ни в игре.`,
+          message: t('Плагин {0} из «{1}» требует мастер-файл {2}, а его нет ни в модах, ни в игре.', p.name, title(p.owner), m),
         });
       }
     }
@@ -222,8 +223,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
       code: 'file-conflict',
       subject: p.b,
       related: [p.a],
-      message: `«${title(p.b)}» и «${title(p.a)}» меняют одни и те же файлы (${p.count}, напр. ${p.sample}). Сейчас побеждает «${title(p.b)}».`,
-      fix: { kind: 'add-rule', label: `Закрепить: «${title(p.b)}» после «${title(p.a)}»`, rule: { subject: p.b, kind: 'after', other: p.a } },
+      message: t('«{0}» и «{1}» меняют одни и те же файлы ({2}, напр. {3}). Сейчас побеждает «{4}».', title(p.b), title(p.a), p.count, p.sample, title(p.b)),
+      fix: { kind: 'add-rule', label: t('Закрепить: «{0}» после «{1}»', title(p.b), title(p.a)), rule: { subject: p.b, kind: 'after', other: p.a } },
     });
   }
 
@@ -241,8 +242,8 @@ export function checkCompatibility(profile: Profile, collections: Collection[], 
         code: 'duplicate',
         subject: m.key,
         related: [other.key],
-        message: `«${m.title}» похоже на «${other.title}» из другого источника. Две копии одного мода обычно конфликтуют.`,
-        fix: { kind: 'disable', label: `Выключить «${m.title}»`, key: m.key },
+        message: t('«{0}» похоже на «{1}» из другого источника. Две копии одного мода обычно конфликтуют.', m.title, other.title),
+        fix: { kind: 'disable', label: t('Выключить «{0}»', m.title), key: m.key },
       });
   }
 

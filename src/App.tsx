@@ -15,28 +15,29 @@ import { PlanSheet } from './sheets/PlanSheet';
 import { AddGameSheet } from './sheets/AddGameSheet';
 import { HealthSheet, UpdateSheet } from './sheets/StartupSheets';
 import { Spinner } from './components/ui';
+import { t } from '../shared/i18n';
 
 function Toasts() {
   const toasts = useUI((s) => s.toasts);
   const dismiss = useUI((s) => s.dismiss);
   return (
     <div className="toasts" aria-live="polite">
-      {toasts.map((t) => (
-        <div key={t.id} className="toast" role={t.kind === 'err' ? 'alert' : 'status'}>
-          {t.kind === 'ok' ? <CircleCheck size={18} className="ok" /> : t.kind === 'err' ? <CircleX size={18} className="err" /> : <Info size={18} className="info" />}
-          <span className="grow">{t.text}</span>
-          {t.undo && (
+      {toasts.map((toast) => (
+        <div key={toast.id} className="toast" role={toast.kind === 'err' ? 'alert' : 'status'}>
+          {toast.kind === 'ok' ? <CircleCheck size={18} className="ok" /> : toast.kind === 'err' ? <CircleX size={18} className="err" /> : <Info size={18} className="info" />}
+          <span className="grow">{toast.text}</span>
+          {toast.undo && (
             <button
               className="btn sm"
               onClick={() => {
-                dismiss(t.id);
-                void useUI.getState().run(() => api.rollback(t.undo!.snapshotId));
+                dismiss(toast.id);
+                void useUI.getState().run(() => api.rollback(toast.undo!.snapshotId));
               }}
             >
-              {t.undo.label}
+              {toast.undo.label}
             </button>
           )}
-          <button className="btn ghost sm icon" aria-label="Закрыть" onClick={() => dismiss(t.id)}>
+          <button className="btn ghost sm icon" aria-label={t("Закрыть")} onClick={() => dismiss(toast.id)}>
             <X size={14} />
           </button>
         </div>
@@ -51,6 +52,7 @@ export function App() {
   const addGameOpen = useUI((s) => s.addGameOpen);
   const health = useUI((s) => s.health);
   const update = useUI((s) => s.update);
+  const lang = useUI((s) => s.state?.settings.language);
   const setAddGame = useUI((s) => s.setAddGame);
   const init = useUI((s) => s.init);
   const { game } = useActive();
@@ -90,7 +92,8 @@ export function App() {
   };
 
   return (
-    <div className="app">
+    // a new language re-renders every screen
+    <div className="app" key={lang}>
       <Rail />
       <main className="main">
         <Header />

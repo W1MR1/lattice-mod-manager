@@ -9,6 +9,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { path7za } from '7zip-bin';
 import yauzl from 'yauzl';
+import { t } from '../../shared/i18n';
 
 export type ArchiveKind = 'zip' | '7z' | 'rar';
 
@@ -31,7 +32,7 @@ export function safeRel(name: string): string | null {
 export function listZip(file: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     yauzl.open(file, { lazyEntries: true }, (err, zip) => {
-      if (err || !zip) return reject(err ?? new Error('Не удалось открыть архив'));
+      if (err || !zip) return reject(err ?? new Error(t('Не удалось открыть архив')));
       const names: string[] = [];
       zip.on('entry', (e: yauzl.Entry) => {
         if (!/\/$/.test(e.fileName)) names.push(e.fileName);
@@ -48,7 +49,7 @@ export function listZip(file: string): Promise<string[]> {
 export function extractZip(file: string, dest: string, map: (name: string) => string | null): Promise<number> {
   return new Promise((resolve, reject) => {
     yauzl.open(file, { lazyEntries: true }, (err, zip) => {
-      if (err || !zip) return reject(err ?? new Error('Не удалось открыть архив'));
+      if (err || !zip) return reject(err ?? new Error(t('Не удалось открыть архив')));
       let count = 0;
       zip.on('error', reject);
       zip.on('end', () => resolve(count));
@@ -111,7 +112,7 @@ function run7z(args: string[]): Promise<string> {
     child.stdout.on('data', (d) => (out += d));
     child.stderr.on('data', (d) => (err += d));
     child.on('error', reject);
-    child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`7-Zip: ${err.trim() || `код ${code}`}`))));
+    child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`7-Zip: ${err.trim() || t('код {0}', code)}`))));
   });
 }
 

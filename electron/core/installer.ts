@@ -7,6 +7,7 @@ import type { GameDef, ModVersion } from '../../shared/types';
 import { resolveFiles, type FileState, type FomodChoices, type FomodConfig } from '../../shared/fomod';
 import { archiveKind, extractArchive, listArchive, listTree, readEntry, safeRel, unpackTo, withTemp } from './archives';
 import { decodeXml, findFomod, parseFomod } from './fomod';
+import { t } from '../../shared/i18n';
 
 export { safeRel } from './archives';
 
@@ -21,7 +22,7 @@ const DATA_DIRS = new Set([
 /** Thrown when an archive carries a FOMOD installer and no choices were given. */
 export class FomodRequired extends Error {
   constructor(public config: FomodConfig) {
-    super(`«${config.moduleName}»: нужно пройти установщик FOMOD`);
+    super(t('«{0}»: нужно пройти установщик FOMOD', config.moduleName));
   }
 }
 
@@ -203,7 +204,7 @@ export async function stageVersion(def: GameDef, version: ModVersion, downloaded
       continue;
     }
     const names = (await listArchive(file)).map((n) => n.replace(/\\/g, '/'));
-    for (const n of names) if (RISKY.test(n)) warnings.push(`В архиве есть исполняемый файл: ${n}`);
+    for (const n of names) if (RISKY.test(n)) warnings.push(t('В архиве есть исполняемый файл: {0}', n));
 
     const fomod = def.kind === 'generic' ? findFomod(names) : null;
     if (fomod) {
@@ -226,7 +227,7 @@ export async function stageVersion(def: GameDef, version: ModVersion, downloaded
         : genericMapper(def, names);
     fileCount += await extractArchive(file, dir, map);
   }
-  if (fileCount === 0) throw new Error('В архиве не нашлось файлов для установки');
+  if (fileCount === 0) throw new Error(t('В архиве не нашлось файлов для установки'));
   await fs.writeFile(path.join(dir, MARKER), new Date().toISOString());
   return { stagedPath: dir, warnings, fileCount, choices: usedChoices };
 }

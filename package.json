@@ -1,7 +1,7 @@
 {
   "name": "lattice-mod-manager",
   "productName": "Lattice",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Менеджер модов и коллекций с графом совместимости и многопоточными загрузками там, где источник это разрешает",
   "author": "Lattice contributors",
   "license": "GPL-3.0-or-later",
@@ -19,7 +19,8 @@
     "demo": "vite --config vite.demo.config.ts",
     "build:demo": "vite build --config vite.demo.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "i18n": "node scripts/i18n.mjs"
   },
   "dependencies": {
     "7zip-bin": "5.2.0",
@@ -83,7 +84,18 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Lattice"
+      "shortcutName": "Lattice",
+      "multiLanguageInstaller": true,
+      "displayLanguageSelector": true,
+      "installerLanguages": [
+        "en_US",
+        "zh_CN",
+        "ru_RU",
+        "es_ES",
+        "pt_BR",
+        "de_DE"
+      ],
+      "include": "build/installer.nsh"
     },
     "publish": [
       {

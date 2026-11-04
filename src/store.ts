@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { AppState, CompatReport, DownloadView, GameDef, HealthProblem, InstallPlan, ManagedGame, Profile } from '../shared/types';
 import { api, bridge, type UpdateEvent } from './api';
+import { setLang, type Lang } from '../shared/i18n';
+import { t } from '../shared/i18n';
 
 export type Route = 'mods' | 'discover' | 'graph' | 'collections' | 'downloads' | 'snapshots' | 'settings';
 export const ROUTES: Route[] = ['mods', 'discover', 'graph', 'collections', 'downloads', 'snapshots', 'settings'];
@@ -70,7 +72,7 @@ export const useUI = create<UI>((set, get) => ({
     try {
       const problems = await api.healthCheck();
       if (problems.length) set({ health: problems });
-      else if (manual) get().toast('ok', 'Проверка целостности: всё в порядке');
+      else if (manual) get().toast('ok', t('Проверка целостности: всё в порядке'));
     } catch (e) {
       if (manual) get().toast('err', (e as Error).message);
     }
@@ -78,10 +80,13 @@ export const useUI = create<UI>((set, get) => ({
 
   async init() {
     const [state, defs, downloads] = await Promise.all([api.state(), api.gameDefs(), bridge.downloads('list')]);
+    applyLang(state.settings.language);
     set({ state, defs, downloads, ready: true });
     applyTheme(state.settings.theme);
     bridge.on('state', (s) => {
       const prev = get().state?.settings.theme;
+      // before the state lands, so the next render already speaks the new language
+      if (s.settings.language !== get().state?.settings.language) applyLang(s.settings.language);
       set({ state: s });
       if (prev !== s.settings.theme) applyTheme(s.settings.theme);
       scheduleCompat();
@@ -162,6 +167,11 @@ export const useUI = create<UI>((set, get) => ({
 function scheduleCompat() {
   if (compatTimer) clearTimeout(compatTimer);
   compatTimer = setTimeout(() => void useUI.getState().refreshCompat(), 120);
+}
+
+function applyLang(l: Lang | undefined) {
+  setLang(l ?? 'en');
+  document.documentElement.lang = l ?? 'en';
 }
 
 function applyTheme(t: 'dark' | 'light') {
