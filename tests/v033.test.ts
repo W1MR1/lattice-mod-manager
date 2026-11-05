@@ -93,16 +93,16 @@ describe('quarantine, snapshots and cleaning at start', () => {
     });
     svc.store.state.snapshots.push(snap(1, live), snap(2, live), snap(3, live), snap(4, live), snap(5, old));
 
-    let u = await svc.diskUsage();
+    const u = await svc.diskUsage();
     expect(u.snapshots).toBe('snapshot!'.length);
     expect(u.unusedCount).toBe(0);
     expect((await svc.freeUnused()).removed).toBe(0); // a snapshot still needs it
 
+    // stepping the limit down and back up loses nothing: it takes effect with the next snapshot or start
     svc.updateSettings({ snapshotLimit: 3 });
-    expect(svc.state().snapshots.map((s) => s.id)).toEqual(['s1', 's2', 's3']);
-    u = await svc.diskUsage();
-    expect(u.snapshots).toBe(0);
-    expect(u.unused).toBe('snapshot!'.length);
+    svc.updateSettings({ snapshotLimit: 5 });
+    svc.updateSettings({ snapshotLimit: 3 });
+    expect(svc.state().snapshots).toHaveLength(5);
     svc.updateSettings({ snapshotLimit: 1 });
     expect(svc.settings.snapshotLimit).toBe(3); // at least three are always kept
 
@@ -110,6 +110,7 @@ describe('quarantine, snapshots and cleaning at start', () => {
     await write(path.join(data, 'quarantine', `${weekAgo}-g1`, 'BepInEx', 'a.dll'));
     await write(path.join(data, 'quarantine', `${Date.now()}-g1`, 'BepInEx', 'b.dll'));
     await svc.cleanupOnStart();
+    expect(svc.state().snapshots.map((s) => s.id)).toEqual(['s1', 's2', 's3']);
     expect(await exists(path.join(data, 'quarantine', `${weekAgo}-g1`))).toBe(false);
     expect((await fs.readdir(path.join(data, 'quarantine'))).length).toBe(1);
     expect(await exists(old)).toBe(false); // what nothing keeps any more is gone too

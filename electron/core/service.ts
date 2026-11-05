@@ -1134,6 +1134,7 @@ export class Service extends EventEmitter {
 
   /** At start: what a crash or a quick exit left behind, and quarantine older than a week. */
   async cleanupOnStart() {
+    if (this.trimSnapshots() > 0) this.changed();
     const week = Date.now() - 7 * 24 * 3600 * 1000;
     for (const e of await fs.readdir(this.dir('quarantine'), { withFileTypes: true }).catch(() => [])) {
       const born = Number(e.name.split('-')[0]);
@@ -1922,8 +1923,7 @@ export class Service extends EventEmitter {
     if (next.language && !LANGS.some((l) => l.id === next.language)) next.language = this.settings.language;
     if (next.language) setLang(next.language);
     this.store.state.settings = next;
-    // fewer snapshots allowed: the oldest go now, and what only they kept is freed
-    if (this.trimSnapshots() > 0) this.tidy();
+    // a lower snapshot limit takes effect with the next snapshot or start, not on every click of the stepper
     this.changed();
   }
 }

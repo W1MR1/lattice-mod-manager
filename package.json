@@ -1,7 +1,7 @@
 {
   "name": "lattice-mod-manager",
   "productName": "Lattice",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Менеджер модов и коллекций с графом совместимости и многопоточными загрузками там, где источник это разрешает",
   "author": "Lattice contributors",
   "license": "GPL-3.0-or-later",
