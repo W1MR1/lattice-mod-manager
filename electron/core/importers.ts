@@ -135,8 +135,9 @@ export async function vortexSources(env: DetectEnv, gameDirs: { defId: string; p
         const target = m.targetPath ?? dir;
         for (const f of m.files ?? []) {
           rec.deployed.add(f.source);
-          rec.files++;
           const at = path.join(target, f.target ?? '');
+          // the list stays behind when Vortex is uninstalled: only files still there count
+          if (await exists(path.join(at, f.relPath))) rec.files++;
           const prefix = path.relative(root, at).replace(/\\/g, '/');
           if (!rec.prefixOf.has(f.source)) rec.prefixOf.set(f.source, prefix);
           rec.winners[path.posix.join(prefix, f.relPath.replace(/\\/g, '/')).toLowerCase()] = f.source;
@@ -316,9 +317,63 @@ export async function scanManagers(env: DetectEnv, gameDirs: { defId: string; pa
   return [...v, ...m, ...r];
 }
 
-/** Files Vortex has deployed into a game copy now (they have to be purged in Vortex before Lattice deploys). */
-export async function vortexDeployedFiles(gameDir: string, def: GameDef): Promise<number> {
-  let n = 0;
-  for (const dir of deployCandidates(gameDir, def)) for (const { m } of await manifestsIn(dir)) n += m.files?.length ?? 0;
-  return n;
+/**
+ * Files from Vortex's deployment lists that are really in the game folder now.
+ * The lists stay behind when Vortex is uninstalled or the files are deleted by
+ * hand; only files that exist count.
+ */
+export async function vortexLeftovers(gameDir: string, def: GameDef, ours?: Set<string>): Promise<{ manifest: string; files: string[] }[]> {
+  const out: { manifest: string; files: string[] }[] = [];
+  const seen = new Set<string>();
+  for (const dir of deployCandidates(gameDir, def)) {
+    for (const { file, m } of await manifestsIn(dir)) {
+      if (seen.has(file.toLowerCase())) continue;
+      seen.add(file.toLowerCase());
+      const base = m.targetPath ?? dir;
+      const files: string[] = [];
+      for (const f of m.files ?? []) {
+        const p = path.join(base, f.target ?? '', f.relPath);
+        // a mod moved over from Vortex is deployed by Lattice to the same place: that file is ours now
+        if (ours?.has(path.resolve(p).toLowerCase())) continue;
+        if (await exists(p)) files.push(p);
+      }
+      out.push({ manifest: file, files });
+    }
+  }
+  return out;
+}
+
+/** Files Vortex has deployed into a game copy and that are still there (`ours`: absolute paths Lattice placed, lower case). */
+export async function vortexDeployedFiles(gameDir: string, def: GameDef, ours?: Set<string>): Promise<number> {
+  return (await vortexLeftovers(gameDir, def, ours)).reduce((n, x) => n + x.files.length, 0);
+}
+
+/**
+ * Does what Vortex's Purge does when Vortex is gone: removes the files its lists
+ * name, puts back the game files it had set aside (".vortex_backup"), and
+ * retires the lists. Nothing else in the folder is touched.
+ */
+export async function removeVortexLeftovers(gameDir: string, def: GameDef, ours?: Set<string>): Promise<{ removed: number; restored: number; failed: string[] }> {
+  let removed = 0;
+  let restored = 0;
+  const failed: string[] = [];
+  for (const { manifest, files } of await vortexLeftovers(gameDir, def, ours)) {
+    for (const p of files) {
+      try {
+        await fs.rm(p, { force: true });
+        removed++;
+      } catch {
+        failed.push(p);
+        continue;
+      }
+      if (await exists(`${p}.vortex_backup`)) {
+        await fs.rename(`${p}.vortex_backup`, p).then(
+          () => restored++,
+          () => failed.push(`${p}.vortex_backup`),
+        );
+      }
+    }
+    if (!failed.length) await fs.rename(manifest, `${manifest}.lattice-old`).catch(() => undefined);
+  }
+  return { removed, restored, failed };
 }

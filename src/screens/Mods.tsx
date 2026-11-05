@@ -57,6 +57,8 @@ export async function runFix(profileId: string, fix: Fix) {
 export function Mods() {
   const { profile, def } = useActive();
   const report = useUI((s) => s.report);
+  // mods made for another game version or loader that a source can replace
+  const misfit = [...new Set((report?.issues ?? []).filter((i) => (i.code === 'incompatible-game' || i.code === 'incompatible-loader') && i.fix?.kind === 'update').map((i) => i.subject))];
   const selected = useUI((s) => s.selected);
   const select = useUI((s) => s.select);
   const go = useUI((s) => s.go);
@@ -126,6 +128,15 @@ export function Mods() {
             ))}
           </div>
           <span className="grow" />
+          {misfit.length > 0 && (
+            <button
+              className="btn primary"
+              title={t('Для каждого мода, который не подходит к версии игры или загрузчику профиля, Lattice подберёт подходящую версию; чего нет — останется в списке проблем')}
+              onClick={() => openPlan(t('Версии под профиль'), () => api.planUpdates(profile.id, misfit))}
+            >
+              <RefreshCw size={15} /> {t('Подобрать версии под профиль ({0})', misfit.length)}
+            </button>
+          )}
           <button className="btn" disabled={total === 0} onClick={() => openPlan(t('Безопасное обновление модов'), () => api.planUpdates(profile.id))} title={t("Обновит только то, что не ломает связи")}>
             <RefreshCw size={15} /> {t('Обновить безопасно')}
           </button>

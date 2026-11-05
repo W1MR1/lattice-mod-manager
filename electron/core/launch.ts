@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { GameDef, InstallInfo } from '../../shared/types';
-import { getJson } from './http';
+import { getJson, HttpError } from './http';
 import { t } from '../../shared/i18n';
 
 export type LaunchTarget = { kind: 'steam'; appId: string } | { kind: 'exe'; path: string; args?: string[] } | { kind: 'url'; url: string };
@@ -59,9 +59,14 @@ export async function installMinecraftLoader(root: string, gameVersion: string, 
       t('{0} ставится только своим официальным установщиком (neoforged.net / files.minecraftforge.net). Установите его, затем выберите его профиль в лаунчере Minecraft.', loader === 'neoforge' ? 'NeoForge' : 'Forge'),
     );
   }
-  const list = await getJson<{ loader: { version: string; stable?: boolean } }[]>(meta.list(gameVersion), {}, 3_600_000);
+  const loaderName = loader === 'quilt' ? 'Quilt' : 'Fabric';
+  // Fabric answers 400 "[]" (Quilt 404) for a Minecraft version it does not know, e.g. a snapshot
+  const list = await getJson<{ loader: { version: string; stable?: boolean } }[]>(meta.list(gameVersion), {}, 3_600_000).catch((e) => {
+    if (e instanceof HttpError && (e.status === 400 || e.status === 404)) return [];
+    throw e;
+  });
   const pick = list.find((x) => x.loader.stable) ?? list.find((x) => !/beta|alpha|rc/i.test(x.loader.version)) ?? list[0];
-  if (!pick) throw new Error(t('Загрузчик {0} не поддерживает Minecraft {1}', loader, gameVersion));
+  if (!pick) throw new Error(t('{0} не поддерживает Minecraft {1}: выберите в профиле версию, для которой есть {0}.', loaderName, gameVersion));
   const profile = await getJson<{ id: string }>(meta.profile(gameVersion, pick.loader.version), {}, 3_600_000);
 
   const dir = path.join(root, 'versions', profile.id);
@@ -123,6 +128,7 @@ const SCRIPT_EXTENDERS: Record<string, string[]> = {
 /** How to start a non-Minecraft game with its deployed mods. */
 /** How to start a game copy: its mod loader, its store, or its executable. */
 export async function gameLaunchTarget(def: GameDef, installPath: string, install?: InstallInfo): Promise<LaunchTarget> {
+  if (install?.customExe && install.launcherExe) return { kind: 'exe', path: install.launcherExe };
   for (const exe of SCRIPT_EXTENDERS[def.id] ?? []) {
     const p = path.join(installPath, exe);
     if (await exists(p)) return { kind: 'exe', path: p };

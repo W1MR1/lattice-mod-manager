@@ -46,6 +46,7 @@ describe('Vortex', () => {
     await write(path.join(staging, 'Not deployed', 'Other.dll'));
     await write(path.join(staging, '__folder_managed_by_vortex'), '');
     const plugins = path.join(game, 'BepInEx', 'plugins');
+    await write(path.join(plugins, 'Jotunn.dll'));
     await write(
       path.join(plugins, 'vortex.deployment.json'),
       JSON.stringify({ version: 1, instance: 'x', stagingPath: staging, targetPath: plugins, files: [{ relPath: 'Jotunn.dll', source: 'Jotunn-1138-2-20-0-1700000000', time: 1 }] }),
@@ -132,9 +133,16 @@ describe('moving a Vortex setup into Lattice', () => {
     await svc.applyPlan(plan.id, true);
     const moved = svc.state().profiles.find((p) => p.name === 'Moved')!;
     expect(Object.keys(moved.mods)).toHaveLength(2);
-    // the files Vortex keeps in the game stop Lattice from deploying over them
     await svc.switchProfile(g.id, moved.id).catch(() => undefined);
+    // Lattice now deploys shared.cfg where Vortex's old list names it: that file is Lattice's, not a leftover
+    expect(await fs.readFile(path.join(game, 'BepInEx', 'config', 'shared.cfg'), 'utf8')).toBe('a');
+    await expect(svc.deploy(moved.id)).resolves.toMatchObject({ failed: [] });
+    // a file Vortex really left in the game stops Lattice from deploying over it
+    await write(path.join(game, 'BepInEx', 'A.txt'), 'vortex');
     await expect(svc.deploy(moved.id)).rejects.toThrow(/Vortex/);
+    // deleted by hand: nothing blocks any more, even though Vortex's list is still there
+    await fs.rm(path.join(game, 'BepInEx', 'A.txt'));
+    await expect(svc.deploy(moved.id)).resolves.toMatchObject({ failed: [] });
   });
 });
 

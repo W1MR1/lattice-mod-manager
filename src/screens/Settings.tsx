@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Download, FolderOpen, Moon, RefreshCw, ShieldCheck, Sun, Trash2, TriangleAlert, Upload } from 'lucide-react';
 import type { SourceId } from '../../shared/types';
 import { api, APP_VERSION, bridge } from '../api';
-import { SOURCE_LABEL } from '../format';
+import { bytes, SOURCE_LABEL } from '../format';
 import { useActive, useUI } from '../store';
 import { Modal, Spinner, Stepper, Switch } from '../components/ui';
 import { McContextFields } from '../sheets/ProfileSheet';
@@ -128,6 +128,48 @@ function NexusSection() {
         </button>
       </div>
     </section>
+  );
+}
+
+/** Space Lattice takes, and freeing what no profile, snapshot or open plan needs. */
+function DiskField() {
+  const run = useUI((x) => x.run);
+  const [u, setU] = useState<Awaited<ReturnType<typeof api.diskUsage>> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = () =>
+    api
+      .diskUsage()
+      .then(setU)
+      .catch(() => setU(null));
+  useEffect(() => {
+    void load();
+  }, []);
+  return (
+    <div className="field">
+      <div className="grow">
+        {t('Место на диске')}
+        <small>
+          {u
+            ? t('Скачанные файлы: {0} · подготовленные копии модов: {1} · не нужны ни одному профилю и снимку: {2}', bytes(u.downloads), bytes(u.staging), bytes(u.unused))
+            : t('Считаем…')}
+          <br />
+          {t('Ненужное Lattice убирает и сам после удаления модов, профилей, коллекций и отменённых установок.')}
+        </small>
+      </div>
+      <button
+        className="btn sm"
+        disabled={!u || u.unusedCount === 0 || busy}
+        onClick={async () => {
+          setBusy(true);
+          const r = await run(() => api.freeUnused());
+          setBusy(false);
+          if (r) useUI.getState().toast('ok', t('Освобождено: {0}', bytes(r.freed)));
+          void load();
+        }}
+      >
+        {busy && <Spinner />} {t('Освободить')}
+      </button>
+    </div>
   );
 }
 
@@ -397,6 +439,35 @@ export function Settings() {
                 </div>
                 <div className="field">
                   <div className="grow">
+                    {t('Чем запускать')}
+                    <small>
+                      {game.install?.launcherExe ? (
+                        <span className="mono">{game.install.launcherExe}</span>
+                      ) : def?.kind === 'minecraft' ? (
+                        t('Exe лаунчера не найден: «Играть» поставит загрузчик и подскажет, что выбрать. Укажите его, чтобы Lattice открывал лаунчер сам.')
+                      ) : (
+                        t('Определяется само: Steam, Epic, exe игры или загрузчик модов.')
+                      )}
+                      {game.install?.customExe && <> · {t('выбрано вручную')}</>}
+                    </small>
+                  </div>
+                  <button
+                    className="btn sm"
+                    onClick={async () => {
+                      const exe = await bridge.dialog('exe');
+                      if (exe) await run(() => api.setLauncherExe(game.id, exe), t('Lattice будет запускать: {0}', exe.split(/[\\/]/).pop() ?? exe));
+                    }}
+                  >
+                    {t('Указать exe…')}
+                  </button>
+                  {game.install?.customExe && (
+                    <button className="btn sm ghost" onClick={() => run(() => api.setLauncherExe(game.id, null), t('Запуск снова определяется сам'))}>
+                      {t('Сбросить')}
+                    </button>
+                  )}
+                </div>
+                <div className="field">
+                  <div className="grow">
                     {t('Название профиля')}
                     <small>{t('Активный профиль этой игры.')}</small>
                   </div>
@@ -468,6 +539,7 @@ export function Settings() {
                   <ShieldCheck size={13} /> {t('Проверить')}
                 </button>
               </div>
+              <DiskField />
               <div className="field">
                 <div className="grow">
                   {t('Обновления Lattice')}

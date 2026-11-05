@@ -133,6 +133,7 @@ export function Header() {
           setDeploying(true);
           const r = await run(() => api.deploy(profile.id));
           setDeploying(false);
+          if (!r) void useUI.getState().checkHealth();
           if (r) useUI.getState().toast('ok', t('Моды в папке игры: {0}\nНовых файлов {1}, убрано {2}{3}', r.root, r.deployed, r.removed, r.backedUp ? t(', сохранено оригиналов {0}', r.backedUp) : ''));
         }}
       >
@@ -147,6 +148,7 @@ export function Header() {
           setLaunching(true);
           const r = await run(() => api.launchGame(game.id));
           setLaunching(false);
+          if (!r) void useUI.getState().checkHealth();
           if (r) useUI.getState().toast('info', r.note);
         }}
       >

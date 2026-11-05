@@ -148,6 +148,8 @@ export const useUI = create<UI>((set, get) => ({
   },
 
   closePlan() {
+    const open = get().plan;
+    if (open) void api.discardPlan(open.id).catch(() => undefined);
     set({ plan: null, planning: null });
   },
 

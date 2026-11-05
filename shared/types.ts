@@ -120,6 +120,8 @@ export interface InstallInfo {
   /** launcher folder that holds versions/ (for home/<version> folders it is their parent) */
   launcherRoot?: string;
   launcherExe?: string;
+  /** the user chose the executable by hand: it is kept when Lattice looks again */
+  customExe?: boolean;
 }
 
 export interface ManagedGame {

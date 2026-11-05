@@ -15,6 +15,8 @@ export interface JarMeta {
   ids: string[];
   /** version of each provided id, where the descriptor states one */
   versions: Record<string, string>;
+  /** loaders the jar itself is made for (its own descriptors, not bundled jars) */
+  loaders?: string[];
   depends: JarDep[];
   breaks: JarDep[];
 }
@@ -134,14 +136,17 @@ function metaOfBuffer(buf: Buffer, depth = 0): JarMeta {
     if (version && !version.includes('$')) for (const id of list) versions[id.toLowerCase()] ??= version;
   };
 
+  const loaders: string[] = [];
   const fabric = parseJson<{ id?: string; version?: string; provides?: string[]; depends?: unknown; breaks?: unknown }>(get('fabric.mod.json'));
   if (fabric?.id) {
+    loaders.push('fabric');
     own([fabric.id, ...(fabric.provides ?? [])], fabric.version);
     depends.push(...depsOf(fabric.depends));
     breaks.push(...depsOf(fabric.breaks));
   }
   const quilt = parseJson<{ quilt_loader?: { id?: string; version?: string; provides?: (string | { id: string })[]; depends?: unknown; breaks?: unknown } }>(get('quilt.mod.json'))?.quilt_loader;
   if (quilt?.id) {
+    loaders.push('quilt');
     own([quilt.id, ...(quilt.provides ?? []).map((p) => (typeof p === 'string' ? p : p.id))], quilt.version);
     depends.push(...depsOf(quilt.depends));
     breaks.push(...depsOf(quilt.breaks));
@@ -150,6 +155,8 @@ function metaOfBuffer(buf: Buffer, depth = 0): JarMeta {
     const b = get(toml);
     if (!b) continue;
     const m = parseModsToml(b.toString('utf8'));
+    // mods.toml serves Forge and early NeoForge; neoforge.mods.toml is NeoForge only
+    loaders.push(...(toml.startsWith('META-INF/neoforge') ? ['neoforge'] : ['forge', 'neoforge']));
     own(m.ids);
     depends.push(...m.depends);
     breaks.push(...m.breaks);
@@ -166,7 +173,7 @@ function metaOfBuffer(buf: Buffer, depth = 0): JarMeta {
       for (const [k, v] of Object.entries(m.versions)) versions[k] ??= v;
     }
   }
-  return { ids: [...new Set(ids)], versions, depends, breaks };
+  return { ids: [...new Set(ids)], versions, depends, breaks, loaders: [...new Set(loaders)] };
 }
 
 /** Reads a jar; a file that is not a readable jar declares nothing. */

@@ -24,7 +24,7 @@ let service: Service;
 
 // Only these service methods are reachable from the renderer.
 const ALLOWED = new Set<keyof Service>([
-  'exportProfile', 'backupAll', 'restoreBackup', 'curseforgeAvailable', 'curseforgeCheck', 'modrinthAccount', 'modrinthList', 'scanImports', 'importPlan',
+  'exportProfile', 'backupAll', 'restoreBackup', 'curseforgeAvailable', 'curseforgeCheck', 'modrinthAccount', 'modrinthList', 'scanImports', 'importPlan', 'setLauncherExe', 'diskUsage', 'freeUnused', 'discardPlan',
   'state', 'gameDefs', 'detectGames', 'minecraftVersions', 'addGame', 'removeGame', 'setActiveGame',
   'createProfile', 'updateProfile', 'deleteProfile', 'switchProfile', 'compat', 'search', 'project', 'versions',
   'planInstall', 'planUpdates', 'planCollection', 'applyFix', 'applyPlan', 'setEnabled', 'dependentsOf', 'removeMod',
@@ -67,8 +67,12 @@ function registerIpc() {
     return d.list();
   });
 
-  ipcMain.handle('lattice:dialog', async (e, kind: 'folder' | 'files' | 'collection-open' | 'collection-save' | 'backup-open' | 'backup-save', defaultName?: string) => {
+  ipcMain.handle('lattice:dialog', async (e, kind: 'folder' | 'files' | 'collection-open' | 'collection-save' | 'backup-open' | 'backup-save' | 'exe', defaultName?: string) => {
     if (!fromOurWindow(e) || !win) throw new Error('forbidden');
+    if (kind === 'exe') {
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: t('Программы'), extensions: ['exe'] }] });
+      return r.canceled ? null : r.filePaths[0];
+    }
     if (kind === 'folder') {
       const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
       return r.canceled ? null : r.filePaths[0];
@@ -299,6 +303,16 @@ async function runSmoke() {
     await wait(r === 'discover' ? 4000 : 1500);
     const img = await win.webContents.capturePage();
     await fs.writeFile(path.join(outDir, `${r}.png`), img.toPNG());
+    // long screens: also the middle and the end
+    if (r === 'settings') {
+      for (const [part, at] of [['2', 0.5], ['3', 0.8], ['4', 1]] as const) {
+        await win.webContents.executeJavaScript(
+          `document.querySelectorAll('*').forEach((e) => { if (e.scrollHeight > e.clientHeight + 40 && getComputedStyle(e).overflowY !== 'visible') e.scrollTop = (e.scrollHeight - e.clientHeight) * ${at}; })`,
+        );
+        await wait(600);
+        await fs.writeFile(path.join(outDir, `${r}-${part}.png`), (await win.webContents.capturePage()).toPNG());
+      }
+    }
   }
   await fs.writeFile(path.join(outDir, 'log.txt'), log.join('\n'));
   await service.store.flush();
@@ -321,7 +335,9 @@ function openNxm(url: string) {
 }
 
 // One running instance: a second launch (from an nxm:// link) hands its link over.
-if (!smoke && !app.requestSingleInstanceLock()) app.quit();
+// the uninstaller runs "Lattice.exe --purge-all" to take Lattice's mods out of every game folder
+const purgeAll = process.argv.includes('--purge-all');
+if (!smoke && !purgeAll && !app.requestSingleInstanceLock()) app.quit();
 app.on('second-instance', (_e, argv) => {
   const url = nxmArg(argv);
   if (url) openNxm(url);
@@ -439,6 +455,12 @@ app.whenReady().then(async () => {
       }
     }),
   );
+  if (purgeAll) {
+    for (const g of service.state().games) await service.purge(g.id).catch((e) => trace(`purge ${g.id}: ${(e as Error).message}`));
+    await service.store.flush();
+    app.exit(0);
+    return;
+  }
   service.on('state', (s) => {
     send('state', s);
     syncNxmProtocol(s.settings.handleNxm);

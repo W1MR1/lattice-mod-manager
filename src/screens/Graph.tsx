@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { ArrowUpRight, Network } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUpRight, LocateFixed, Maximize, Network, Search, ZoomIn, ZoomOut } from 'lucide-react';
 import type { CompatReport, Profile } from '../../shared/types';
 import { keyOf } from '../../shared/types';
 import { plural } from '../format';
@@ -130,7 +130,71 @@ export function Graph() {
   const go = useUI((s) => s.go);
   const [hover, setHover] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
+  const [only, setOnly] = useState(false);
+  const [query, setQuery] = useState('');
   const g = useMemo(() => (profile ? layout(profile, report) : null), [profile, report]);
+
+  // ---- view: pan (x, y) and zoom (k) of the graph inside its frame
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 800, h: 600 });
+  const [view, setView] = useState<{ x: number; y: number; k: number } | null>(null);
+  const drag = useRef<{ sx: number; sy: number; x: number; y: number; moved: boolean } | null>(null);
+  const clamp = (k: number) => Math.min(3, Math.max(0.08, k));
+
+  const fit = useCallback(() => {
+    if (!g) return;
+    const k = clamp(Math.min(1, (size.w - 32) / g.width, (size.h - 32) / g.height));
+    setView({ k, x: (size.w - g.width * k) / 2, y: Math.max(12, (size.h - g.height * k) / 2) });
+  }, [g, size.w, size.h]);
+
+  const zoomAt = (factor: number, cx = size.w / 2, cy = size.h / 2) =>
+    setView((v) => {
+      if (!v) return v;
+      const k = clamp(v.k * factor);
+      const f = k / v.k;
+      return { k, x: cx - (cx - v.x) * f, y: cy - (cy - v.y) * f };
+    });
+
+  const centerOn = (key: string) => {
+    const n = g?.nodes.find((x) => x.key === key);
+    if (!n) return;
+    setView((v) => {
+      const k = Math.max(v?.k ?? 1, 0.8);
+      return { k, x: size.w / 2 - (n.x + W / 2) * k, y: size.h / 2 - (n.y + H / 2) * k };
+    });
+  };
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    setSize({ w: el.clientWidth, h: el.clientHeight });
+    // wheel zooms around the cursor; Shift+wheel and two-finger swipes move the view
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      if (e.shiftKey || (!e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY))) {
+        setView((v) => (v ? { ...v, x: v.x - (e.deltaX || e.deltaY), y: e.shiftKey ? v.y : v.y - e.deltaY } : v));
+        return;
+      }
+      zoomAtRef.current(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), e.clientX - r.left, e.clientY - r.top);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener('wheel', onWheel);
+    };
+  }, [(g?.nodes.length ?? 0) > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  const zoomAtRef = useRef(zoomAt);
+  zoomAtRef.current = zoomAt;
+
+  // a new profile or a first look: the whole graph in view
+  const nodeCount = g?.nodes.length ?? 0;
+  useEffect(() => {
+    if (nodeCount && size.w > 100) fit();
+  }, [profile?.id, nodeCount > 0, size.w > 100]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!profile || !g) return null;
   if (g.nodes.length === 0)
     return (
@@ -142,6 +206,33 @@ export function Graph() {
   const pos = new Map(g.nodes.map((n) => [n.key, n]));
   const focus = hover ?? picked;
   const near = new Set<string>(focus ? [focus, ...g.edges.filter((e) => e.from === focus || e.to === focus).flatMap((e) => [e.from, e.to])] : []);
+  // "only its links": everything the picked mod needs and everything that needs it, all the way
+  const chain = new Set<string>();
+  if (only && picked) {
+    const walk = (k: string, dir: 'up' | 'down') => {
+      for (const e of g.edges) {
+        const next = dir === 'up' ? (e.to === k ? e.from : null) : e.from === k ? e.to : null;
+        if (next && !chain.has(next)) {
+          chain.add(next);
+          walk(next, dir);
+        }
+      }
+    };
+    chain.add(picked);
+    walk(picked, 'up');
+    walk(picked, 'down');
+  }
+  const hidden = (k: string) => only && !!picked && !chain.has(k);
+  const v = view ?? { x: 0, y: 0, k: 1 };
+  const find = (text: string) => {
+    const q = text.trim().toLowerCase();
+    if (!q) return;
+    const hit = g.nodes.find((n) => n.title.toLowerCase().includes(q));
+    if (hit) {
+      setPicked(hit.key);
+      centerOn(hit.key);
+    }
+  };
   const issues = report?.issues ?? [];
   const pickedNode = picked ? pos.get(picked) : undefined;
   const pickedIssues = picked ? issues.filter((i) => i.subject === picked || i.related.includes(picked)) : [];
@@ -163,10 +254,59 @@ export function Graph() {
             <span>{t('Пунктирная рамка — зависимость не установлена')}</span>
           </div>
           <span className="grow" />
-          <span className="faint">{t('Зависимости слева, зависимые справа')}</span>
+          <div className="search" style={{ width: 220 }}>
+            <Search size={15} />
+            <input
+              className="input"
+              placeholder={t('Найти мод на графе')}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && find(query)}
+              aria-label={t('Найти мод на графе')}
+            />
+          </div>
+          <label className="row muted" title={t('Оставить на графе только то, что нужно выбранному моду, и то, что нужно ему самому')}>
+            <input type="checkbox" checked={only} disabled={!picked} onChange={(e) => setOnly(e.target.checked)} />
+            {t('Только связи выбранного')}
+          </label>
         </div>
-        <div className="graph-wrap">
-          <svg width={g.width} height={g.height} role="img" aria-label={t('Граф связей: {0} узлов', g.nodes.length)}>
+        <div
+          className="graph-wrap"
+          ref={wrapRef}
+          tabIndex={0}
+          onPointerDown={(e) => {
+            if (e.button !== 0 && e.button !== 1) return;
+            drag.current = { sx: e.clientX, sy: e.clientY, x: v.x, y: v.y, moved: false };
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current;
+            if (!d) return;
+            const dx = e.clientX - d.sx;
+            const dy = e.clientY - d.sy;
+            if (!d.moved && Math.hypot(dx, dy) < 4) return;
+            d.moved = true;
+            setView({ ...v, x: d.x + dx, y: d.y + dy });
+          }}
+          onPointerUp={() => {
+            // a drag that moved is not a click on the node under it
+            setTimeout(() => (drag.current = null), 0);
+          }}
+          onKeyDown={(e) => {
+            const step = 80;
+            if (e.key === '+' || e.key === '=') zoomAt(1.2);
+            else if (e.key === '-') zoomAt(1 / 1.2);
+            else if (e.key === '0') fit();
+            else if (e.key === 'ArrowLeft') setView({ ...v, x: v.x + step });
+            else if (e.key === 'ArrowRight') setView({ ...v, x: v.x - step });
+            else if (e.key === 'ArrowUp') setView({ ...v, y: v.y + step });
+            else if (e.key === 'ArrowDown') setView({ ...v, y: v.y - step });
+            else return;
+            e.preventDefault();
+          }}
+        >
+          <svg width="100%" height="100%" role="img" aria-label={t('Граф связей: {0} узлов', g.nodes.length)}>
+            <g transform={`translate(${v.x} ${v.y}) scale(${v.k})`}>
             {g.edges.map((e, i) => {
               const a = pos.get(e.from);
               const b = pos.get(e.to);
@@ -178,16 +318,25 @@ export function Graph() {
               const y2 = b.y + H / 2;
               const d = sameCol ? `M${x1} ${y1} C${x1 + 60} ${y1}, ${x2 + 60} ${y2}, ${x2} ${y2}` : `M${x1} ${y1} C${x1 + 70} ${y1}, ${x2 - 70} ${y2}, ${x2} ${y2}`;
               const hl = focus && (e.from === focus || e.to === focus);
+              if (hidden(e.from) || hidden(e.to)) return null;
               return <path key={i} d={d} className={`graph-edge ${e.kind === 'rec' ? 'rec' : e.kind === 'conflict' ? 'conflict' : ''} ${hl && e.kind !== 'conflict' ? 'hl' : ''} ${focus && !hl ? 'graph-dim' : ''}`} />;
             })}
-            {g.nodes.map((n) => (
+            {g.nodes.filter((n) => !hidden(n.key)).map((n) => (
               <g
                 key={n.key}
                 className={`graph-node ${n.ghost ? 'ghost' : ''} ${!n.enabled && !n.ghost ? 'off' : ''} ${picked === n.key ? 'sel' : ''} ${focus && !near.has(n.key) ? 'graph-dim' : ''}`}
                 transform={`translate(${n.x} ${n.y})`}
                 onMouseEnter={() => setHover(n.key)}
                 onMouseLeave={() => setHover(null)}
-                onClick={() => setPicked(n.key === picked ? null : n.key)}
+                onClick={() => {
+                  if (drag.current?.moved) return;
+                  setPicked(n.key === picked ? null : n.key);
+                }}
+                onDoubleClick={() => {
+                  if (n.ghost) return;
+                  select(n.key);
+                  go('mods');
+                }}
                 role="button"
                 aria-label={`${n.title}, ${n.version}`}
               >
@@ -204,7 +353,27 @@ export function Graph() {
                 </text>
               </g>
             ))}
+            </g>
           </svg>
+          <Minimap g={g} view={v} size={size} picked={picked} onMove={(cx, cy) => setView({ ...v, x: size.w / 2 - cx * v.k, y: size.h / 2 - cy * v.k })} />
+          <div className="graph-controls" onPointerDown={(e) => e.stopPropagation()}>
+            <button className="btn sm icon" title={t('Отдалить (−)')} aria-label={t('Отдалить (−)')} onClick={() => zoomAt(1 / 1.25)}>
+              <ZoomOut size={15} />
+            </button>
+            <button className="btn sm mono" title={t('Масштаб 100%')} onClick={() => zoomAt(1 / v.k)} style={{ minWidth: 56 }}>
+              {Math.round(v.k * 100)}%
+            </button>
+            <button className="btn sm icon" title={t('Приблизить (+)')} aria-label={t('Приблизить (+)')} onClick={() => zoomAt(1.25)}>
+              <ZoomIn size={15} />
+            </button>
+            <button className="btn sm icon" title={t('Весь граф (0)')} aria-label={t('Весь граф (0)')} onClick={fit}>
+              <Maximize size={15} />
+            </button>
+            <button className="btn sm icon" title={t('К выбранному моду')} aria-label={t('К выбранному моду')} disabled={!picked} onClick={() => picked && centerOn(picked)}>
+              <LocateFixed size={15} />
+            </button>
+          </div>
+          <div className="graph-hint faint">{t('Колесо — масштаб, перетаскивание — перемещение, двойной щелчок — открыть мод')}</div>
         </div>
       </div>
       <aside className="graph-side" aria-label={t("Совместимость")}>
@@ -255,5 +424,44 @@ export function Graph() {
         ))}
       </aside>
     </div>
+  );
+}
+
+/** The whole graph in small, with the visible part framed; a click or drag moves the view there. */
+function Minimap({ g, view, size, picked, onMove }: { g: { nodes: GNode[]; width: number; height: number }; view: { x: number; y: number; k: number }; size: { w: number; h: number }; picked: string | null; onMove: (cx: number, cy: number) => void }) {
+  const ref = useRef<SVGSVGElement>(null);
+  const down = useRef(false);
+  const MW = 180;
+  const MH = 120;
+  const scale = Math.min(MW / g.width, MH / g.height);
+  const ox = (MW - g.width * scale) / 2;
+  const oy = (MH - g.height * scale) / 2;
+  const toContent = (e: React.PointerEvent) => {
+    const r = ref.current!.getBoundingClientRect();
+    return [(e.clientX - r.left - ox) / scale, (e.clientY - r.top - oy) / scale] as const;
+  };
+  return (
+    <svg
+      ref={ref}
+      className="graph-minimap"
+      width={MW}
+      height={MH}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        down.current = true;
+        (e.currentTarget as Element).setPointerCapture(e.pointerId);
+        onMove(...toContent(e));
+      }}
+      onPointerMove={(e) => down.current && onMove(...toContent(e))}
+      onPointerUp={() => (down.current = false)}
+      aria-hidden
+    >
+      <g transform={`translate(${ox} ${oy}) scale(${scale})`}>
+        {g.nodes.map((n) => (
+          <rect key={n.key} x={n.x} y={n.y} width={W} height={H} rx={6} fill={n.key === picked ? 'var(--accent)' : TONE_VAR[n.tone]} opacity={n.key === picked ? 1 : 0.55} />
+        ))}
+        <rect className="graph-minimap-view" x={-view.x / view.k} y={-view.y / view.k} width={size.w / view.k} height={size.h / view.k} />
+      </g>
+    </svg>
   );
 }

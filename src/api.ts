@@ -15,7 +15,7 @@ type Methods =
   | 'inspectPlan' | 'fomodPrompt' | 'reinstallWithChoices' | 'pluginOrder' | 'setNexusKey' | 'clearNexusKey' | 'handleNxm'
   | 'nexusSsoAvailable' | 'loginWithNexus'
   | 'previewRemoval' | 'removeMods' | 'removeAllMods' | 'deleteLeftovers' | 'launchGame' | 'setGamePath' | 'healthCheck' | 'repair'
-  | 'exportProfile' | 'backupAll' | 'restoreBackup' | 'curseforgeAvailable' | 'curseforgeCheck' | 'modrinthAccount' | 'modrinthList' | 'scanImports' | 'importPlan';
+  | 'exportProfile' | 'backupAll' | 'restoreBackup' | 'curseforgeAvailable' | 'curseforgeCheck' | 'modrinthAccount' | 'modrinthList' | 'scanImports' | 'importPlan' | 'setLauncherExe' | 'diskUsage' | 'freeUnused' | 'discardPlan';
 
 type Fn<K extends Methods> = Service[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
 export type Api = { [K in Methods]: Fn<K> };
@@ -36,6 +36,7 @@ interface Bridge {
   dialog(kind: 'collection-open'): Promise<string | null>;
   dialog(kind: 'collection-save', defaultName?: string): Promise<string | null>;
   dialog(kind: 'backup-open'): Promise<string | null>;
+  dialog(kind: 'exe'): Promise<string | null>;
   dialog(kind: 'backup-save', defaultName?: string): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   openPath(p: string): Promise<void>;

@@ -3,7 +3,7 @@
 import type { Collection, CompatReport, InstalledMod, Issue, Profile } from '../../shared/types';
 import { keyOf } from '../../shared/types';
 import { gameVersionFits, loaderFits } from '../../shared/context';
-import { matchesStrict, satisfies } from '../../shared/versions';
+import { matchesStrict, satisfies, violatesStrict } from '../../shared/versions';
 import { computeOrder, providerIndex } from './loadorder';
 import { BUILTIN_IDS, type JarMeta } from './jarmeta';
 import { t } from '../../shared/i18n';
@@ -261,6 +261,29 @@ export function checkCompatibility(
     const provided = new Set<string>(BUILTIN_IDS);
     for (const [, m] of live) for (const id of m.ids) provided.add(id.toLowerCase());
     for (const [k, m] of live) {
+      // the game version and loader the mod file itself asks for (works for any source, local files too)
+      const mc = m.depends.find((d) => d.id.toLowerCase() === 'minecraft');
+      const fixable = profile.mods[k].ref.source !== 'local';
+      if (mc && violatesStrict(ctx.gameVersion, mc.range)) {
+        push({
+          severity: 'error',
+          code: 'incompatible-game',
+          subject: k,
+          related: [],
+          message: t('«{0}» рассчитан на Minecraft {1}, а профиль — {2}: так указано в самом файле мода.', title(k), mc.range ?? '', ctx.gameVersion ?? ''),
+          fix: fixable ? { kind: 'update', label: t('Подобрать совместимую версию'), key: k } : undefined,
+        });
+      }
+      if (ctx.loader && m.loaders?.length && !loaderFits(m.loaders, ctx.loader)) {
+        push({
+          severity: 'error',
+          code: 'incompatible-loader',
+          subject: k,
+          related: [],
+          message: t('«{0}» сделан для {1}, а профиль использует {2}: так указано в самом файле мода.', title(k), m.loaders.join(' / '), ctx.loader),
+          fix: fixable ? { kind: 'update', label: t('Подобрать версию под загрузчик'), key: k } : undefined,
+        });
+      }
       const own = new Set(m.ids.map((x) => x.toLowerCase()));
       for (const d of m.depends) {
         const id = d.id.toLowerCase();

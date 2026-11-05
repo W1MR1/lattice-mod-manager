@@ -47,7 +47,7 @@ import { PLUGIN_EXT, pluginMasters, pluginsTxtPath, restorePluginsTxt, writePlug
 import { resolvePlan, type ProjectMeta } from './resolver';
 import { Sources } from './sources';
 import { CurseForgeSource } from './sources/curseforge';
-import { scanManagers, vortexDeployedFiles, type ImportSource } from './importers';
+import { removeVortexLeftovers, scanManagers, vortexDeployedFiles, type ImportSource } from './importers';
 import { mapPool } from './http';
 import { parseNexusUrl, parseNxm, type NxmLink } from './sources/nexus';
 import { Store } from './store';
@@ -247,6 +247,7 @@ export class Service extends EventEmitter {
     s.snapshots = s.snapshots.filter((x) => !profileIds.has(x.profileId));
     if (s.activeGameId === id) s.activeGameId = s.games[0]?.id;
     this.changed();
+    this.tidy();
   }
 
   setActiveGame(id: string) {
@@ -289,6 +290,7 @@ export class Service extends EventEmitter {
     this.store.state.profiles = this.store.state.profiles.filter((x) => x.id !== id);
     this.store.state.snapshots = this.store.state.snapshots.filter((s) => s.profileId !== id);
     this.changed();
+    this.tidy();
   }
 
   async switchProfile(gameId: string, profileId: string) {
@@ -643,6 +645,7 @@ export class Service extends EventEmitter {
     const staged = new Map<string, { path: string; files: ModFile[]; choices?: FomodChoices }>();
     const warnings: string[] = [];
     const failures: string[] = [];
+    this.busy++;
     const fs0 = def.kind === 'generic' ? await this.fileState(profile) : null;
     await Promise.all(
       items.map(async (it) => {
@@ -670,7 +673,15 @@ export class Service extends EventEmitter {
         }
       }),
     );
-    if (failures.length) throw new Error(t('Не удалось установить:\n{0}', failures.join('\n')));
+    this.busy--;
+    if (failures.length) {
+      // nothing was installed: the copies prepared on this attempt go; downloads wait while the plan is open
+      for (const st of staged.values()) {
+        const used = this.store.state.profiles.some((p) => Object.values(p.mods).some((m) => m.stagedPath === st.path));
+        if (!used) await fs.rm(st.path, { recursive: true, force: true }).catch(() => undefined);
+      }
+      throw new Error(t('Не удалось установить:\n{0}', failures.join('\n')));
+    }
 
     const now = new Date().toISOString();
     const toInstalled = (it: PlanItem, old?: InstalledMod): InstalledMod => ({
@@ -714,6 +725,8 @@ export class Service extends EventEmitter {
       items.length ? t('{0} — готово, изменено модов: {1}', plan.label, items.length) : t('{0} — готово', plan.label),
       before ? { label: t('Откатить'), snapshotId: before.id } : undefined,
     );
+    this.plans.delete(planId);
+    this.tidy();
     await this.redeploy(profile.id);
     if (game.activeProfileId !== profile.id && items.length) {
       this.toast('info', t('Профиль «{0}» готов. Переключитесь на него в шапке, когда будете готовы: Lattice разложит его моды в игру.', profile.name));
@@ -781,6 +794,7 @@ export class Service extends EventEmitter {
     this.changed();
     await this.redeploy(profileId);
     const leftovers = opts.thorough ? await this.findLeftovers(p.gameId, gone) : [];
+    if (!opts.thorough) this.tidy();
     return { removed: gone.map((m) => m.key), blockedBy: [], leftovers };
   }
 
@@ -929,6 +943,7 @@ export class Service extends EventEmitter {
     s.collections = s.collections.filter((c) => c.id !== id);
     for (const p of s.profiles) p.collections = p.collections.filter((x) => x !== id);
     this.changed();
+    this.tidy();
   }
 
   async exportCollection(id: string, file: string) {
@@ -957,6 +972,122 @@ export class Service extends EventEmitter {
 
   modrinthList(list: { collection: string } | { follows: true }) {
     return this.sources.modrinth.listProjects(list);
+  }
+
+  // ---------- launcher chosen by hand
+
+  /** The executable that starts this game (a launcher for Minecraft); null goes back to automatic. */
+  async setLauncherExe(gameId: string, exe: string | null) {
+    const game = this.game(gameId);
+    const def = this.defOf(game);
+    if (!exe) {
+      game.install = (await inspectFolder(game.defId, game.installPath, this.env, (await findMinecraftLauncher()) ?? undefined)).install;
+      this.changed();
+      return;
+    }
+    const st = await fs.stat(exe).catch(() => null);
+    if (!st?.isFile() || !/\.exe$/i.test(exe)) throw new Error(t('Выберите файл .exe лаунчера или игры'));
+    const info = await this.installInfo(game);
+    const n = path.basename(exe).toLowerCase();
+    const guess = /prism/.test(n) ? 'prism' : /multimc/.test(n) ? 'multimc' : /legacy/.test(n) ? 'legacy' : /tlauncher/.test(n) ? 'tlauncher' : /curseforge/.test(n) ? 'curseforge' : /modrinth/.test(n) ? 'modrinth' : /atlauncher/.test(n) ? 'atlauncher' : /^minecraft(launcher)?\.exe$/.test(n) ? 'official' : undefined;
+    game.install = { ...info, launcherExe: path.resolve(exe), customExe: true, ...(def.kind === 'minecraft' ? { launcher: guess ?? info.launcher ?? 'other' } : {}) };
+    this.changed();
+  }
+
+  // ---------- disk: nothing Lattice downloaded or prepared stays without a reason
+
+  /** operations that are writing to the cache right now; cleaning waits for them */
+  private busy = 0;
+
+  private async usedPaths() {
+    const norm = (p: string) => path.resolve(p).toLowerCase();
+    const staged = new Set<string>();
+    const downloads = new Set<string>();
+    const keepFiles = (files: ModFile[]) => {
+      for (const f of files) if (/^https?:|^nexus:/.test(f.url)) downloads.add(norm(path.dirname(this.cachePath(f))));
+    };
+    const mods = [...this.store.state.profiles.flatMap((p) => Object.values(p.mods)), ...this.store.state.snapshots.flatMap((s) => Object.values(s.mods))];
+    for (const m of mods) {
+      if (m.stagedPath) staged.add(norm(m.stagedPath));
+      keepFiles(m.files);
+    }
+    // a plan still on screen keeps what it has downloaded, so trying again does not download again
+    for (const plan of this.plans.values()) for (const it of [...plan.install, ...plan.update]) keepFiles(it.version.files);
+    return { staged, downloads, norm };
+  }
+
+  /** Prepared copies and downloaded files that no profile, snapshot or open plan uses. */
+  private async unusedEntries(): Promise<{ path: string; size: number }[]> {
+    const { staged, downloads, norm } = await this.usedPaths();
+    const active = new Set(this.downloads.list().filter((d) => !['done', 'error', 'cancelled'].includes(d.state)).map((d) => d.filename.toLowerCase()));
+    const out: { path: string; size: number }[] = [];
+    const size = async (p: string) => {
+      let n = 0;
+      for (const rel of await walk(p).catch(() => [] as string[])) n += (await fs.stat(path.join(p, rel)).catch(() => null))?.size ?? 0;
+      return n;
+    };
+    const dirsOf = async (p: string) => (await fs.readdir(p, { withFileTypes: true }).catch(() => [])).filter((e) => e.isDirectory()).map((e) => path.join(p, e.name));
+    const stagingRoot = this.dir('staging');
+    for (const gameDir of await dirsOf(stagingRoot)) {
+      const base = path.basename(gameDir);
+      if (base === '_shared') continue; // modpack files collections point to
+      if (base === '_import') {
+        out.push({ path: gameDir, size: await size(gameDir) }); // leftovers of unpacked modpacks
+        continue;
+      }
+      for (const modDir of await dirsOf(gameDir)) {
+        for (const verDir of await dirsOf(modDir)) if (!staged.has(norm(verDir))) out.push({ path: verDir, size: await size(verDir) });
+      }
+    }
+    for (const a of await dirsOf(this.dir('downloads'))) {
+      for (const b of await dirsOf(a)) {
+        if (downloads.has(norm(b))) continue;
+        const files = await fs.readdir(b).catch(() => [] as string[]);
+        if (files.some((f) => active.has(f.replace(/\.part$/, '').toLowerCase()))) continue;
+        out.push({ path: b, size: await size(b) });
+      }
+    }
+    return out;
+  }
+
+  /** How much space Lattice takes and how much of it nothing needs. */
+  async diskUsage(): Promise<{ downloads: number; staging: number; unused: number; unusedCount: number }> {
+    const total = async (p: string) => {
+      let n = 0;
+      for (const rel of await walk(p).catch(() => [] as string[])) n += (await fs.stat(path.join(p, rel)).catch(() => null))?.size ?? 0;
+      return n;
+    };
+    const unused = await this.unusedEntries();
+    return { downloads: await total(this.dir('downloads')), staging: await total(this.dir('staging')), unused: unused.reduce((a, x) => a + x.size, 0), unusedCount: unused.length };
+  }
+
+  /** Deletes what nothing needs; empty mod folders go too. */
+  async freeUnused(): Promise<{ removed: number; freed: number }> {
+    if (this.busy > 0) return { removed: 0, freed: 0 };
+    let removed = 0;
+    let freed = 0;
+    for (const e of await this.unusedEntries()) {
+      await fs.rm(e.path, { recursive: true, force: true }).then(
+        () => {
+          removed++;
+          freed += e.size;
+        },
+        () => undefined,
+      );
+      const parent = path.dirname(e.path);
+      if (!(await fs.readdir(parent).catch(() => ['x'])).length) await fs.rmdir(parent).catch(() => undefined);
+    }
+    return { removed, freed };
+  }
+
+  /** Cleaning after an operation, without bothering the user. */
+  private tidy() {
+    setTimeout(() => void this.freeUnused().catch(() => undefined), 500);
+  }
+
+  /** A plan that was closed without applying: what it downloaded is no longer kept for it. */
+  discardPlan(planId: string) {
+    if (this.plans.delete(planId)) this.tidy();
   }
 
   // ---------- moving over from other managers
@@ -1247,6 +1378,13 @@ export class Service extends EventEmitter {
     return path.join(game.installPath, this.defOf(game).deployDir);
   }
 
+  /** Absolute paths (lower case) of the files Lattice has placed into a game folder. */
+  private async ourFiles(game: ManagedGame): Promise<Set<string>> {
+    const root = this.deployRoot(game);
+    const rel = await ownedFiles(this.dir('deploy', game.id, 'manifest.json'), root).catch(() => new Set<string>());
+    return new Set([...rel].map((r) => path.resolve(root, r).toLowerCase()));
+  }
+
   private deployOptions(p: Profile, game: ManagedGame): DeployOptions {
     return {
       root: this.deployRoot(game),
@@ -1273,8 +1411,8 @@ export class Service extends EventEmitter {
     if (!st?.isDirectory()) throw new Error(t('Папка игры не найдена: {0}', game.installPath));
     const def = this.defOf(game);
     if (def.kind !== 'minecraft' && Object.values(p.mods).some((m) => m.enabled)) {
-      const vortex = await vortexDeployedFiles(game.installPath, def).catch(() => 0);
-      if (vortex > 0) throw new Error(t('В папке игры лежат моды, развёрнутые Vortex ({0} файлов). Сначала уберите их в Vortex (кнопка Purge), затем примените профиль Lattice.', vortex));
+      const vortex = await vortexDeployedFiles(game.installPath, def, await this.ourFiles(game)).catch(() => 0);
+      if (vortex > 0) throw new Error(t('В папке игры лежат моды, развёрнутые Vortex ({0} файлов). Нажмите Purge в Vortex — или, если Vortex уже удалён, «Проверить целостность» в настройках: Lattice уберёт их сам.', vortex));
     }
     const res = await deploy(this.deployOptions(p, game));
     if (def.pluginsTxt) {
@@ -1323,7 +1461,16 @@ export class Service extends EventEmitter {
     }
     if (launcher === 'official' || launcher === 'legacy' || launcher === 'tlauncher') {
       if (!p.context.gameVersion) throw new Error(t('Укажите версию Minecraft у профиля (Настройки → профиль), чтобы поставить загрузчик под неё.'));
-      const res = await installMinecraftLoader(info.launcherRoot ?? game.installPath, p.context.gameVersion, p.context.loader ?? 'fabric', p.id, p.name, game.installPath);
+      let res: { versionId: string; profileName: string };
+      try {
+        res = await installMinecraftLoader(info.launcherRoot ?? game.installPath, p.context.gameVersion, p.context.loader ?? 'fabric', p.id, p.name, game.installPath);
+      } catch (e) {
+        // the loader could not be set up: the launcher still opens, the version is picked there
+        const exe = info.launcherExe ?? (launcher === 'official' ? await findMinecraftLauncher() : null);
+        if (!exe) throw e;
+        await this.launcher({ kind: 'exe', path: exe });
+        return { note: t('Загрузчик не поставлен: {0} Лаунчер открыт — выберите версию в нём.', (e as Error).message) };
+      }
       if (launcher === 'official') {
         const exe = info.launcherExe ?? (await findMinecraftLauncher());
         if (!exe) return { note: t('Профиль «{0}» добавлен в лаунчер Minecraft. Откройте лаунчер, выберите этот профиль и нажмите «Играть».', res.profileName) };
@@ -1375,8 +1522,9 @@ export class Service extends EventEmitter {
         // what the launcher runs in this folder now (the user may have changed it there)
         const now = await inspectFolder(game.defId, game.installPath, this.env, (await findMinecraftLauncher()) ?? undefined).catch(() => null);
         if (now && samePath(now.path, game.installPath)) {
-          if (JSON.stringify(now.install) !== JSON.stringify(game.install)) {
-            game.install = now.install;
+          const merged = game.install?.customExe ? { ...now.install, launcher: game.install.launcher, launcherExe: game.install.launcherExe, customExe: true } : now.install;
+          if (JSON.stringify(merged) !== JSON.stringify(game.install)) {
+            game.install = merged;
             this.changed();
           }
           const ctx = p.context;
@@ -1390,7 +1538,19 @@ export class Service extends EventEmitter {
             });
           }
         }
-      } else if (!game.install) await this.installInfo(game).catch(() => undefined);
+      } else {
+        if (!game.install) await this.installInfo(game).catch(() => undefined);
+        const vortex = await vortexDeployedFiles(game.installPath, def, await this.ourFiles(game)).catch(() => 0);
+        if (vortex > 0) {
+          out.push({
+            id: `vortex:${game.id}`,
+            title: t('{0}: в папке игры остались файлы Vortex ({1})', game.name, vortex),
+            detail: t('Если вы ещё пользуетесь Vortex, нажмите в нём Purge. Если Vortex удалён, Lattice уберёт эти файлы по его же списку и вернёт оригинальные файлы игры — больше ничего не тронет.'),
+            fixable: true,
+            gameId: game.id,
+          });
+        }
+      }
       const missing: InstalledMod[] = [];
       for (const m of Object.values(p.mods)) if (!(await fs.stat(m.stagedPath).catch(() => null))) missing.push(m);
       if (missing.length) {
@@ -1455,7 +1615,12 @@ export class Service extends EventEmitter {
           this.changed();
           await this.deploy(p.id);
         } else if (pr.id.startsWith('deploy:') || pr.id.startsWith('stale:')) await this.deploy(pr.profileId!);
-        else if (pr.id.startsWith('mcver:')) {
+        else if (pr.id.startsWith('vortex:')) {
+          const game = this.game(pr.gameId!);
+          const r = await removeVortexLeftovers(game.installPath, this.defOf(game), await this.ourFiles(game));
+          if (r.failed.length) throw new Error(t('Не удалось убрать: {0}. Закройте игру и попробуйте снова.', r.failed.slice(0, 3).join(', ')));
+          await this.redeploy(game.activeProfileId);
+        } else if (pr.id.startsWith('mcver:')) {
           const p = this.profile(pr.profileId!);
           const game = this.game(p.gameId);
           const now = await inspectFolder(game.defId, game.installPath, this.env);
@@ -1646,6 +1811,7 @@ export class Service extends EventEmitter {
   deleteSnapshot(id: string) {
     this.store.state.snapshots = this.store.state.snapshots.filter((x) => x.id !== id);
     this.changed();
+    this.tidy();
   }
 
   // ---------- settings
