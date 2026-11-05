@@ -4,7 +4,8 @@
 //  - Mod Organizer 2: instances, mods/<name>/meta.ini (Nexus ids) and
 //    profiles/<name>/modlist.txt (enabled mods and priority);
 //  - r2modman / Thunderstore Mod Manager: profiles/<name>/mods.yml.
-// Nothing here writes to those folders.
+// Nothing here writes to those folders, except removeVortexLeftovers, which
+// does Vortex's Purge for a Vortex that is gone (into a quarantine, reversibly).
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { GameDef } from '../../shared/types';
@@ -96,7 +97,33 @@ interface VortexManifest {
   stagingPath?: string;
   targetPath?: string;
   gameId?: string;
-  files?: { relPath: string; source: string; target?: string }[];
+  files?: VortexFile[];
+}
+
+interface VortexFile {
+  relPath: string;
+  /** the mod folder in the staging folder */
+  source: string;
+  target?: string;
+  /** the file's modification time when Vortex deployed it (ms) */
+  time?: number;
+}
+
+/**
+ * Is the file at a path from Vortex's list still the one Vortex put there? The
+ * same file as in Vortex's mod folder (a hard link) or a copy of the same size
+ * is; without the mod folder, a file changed after Vortex deployed it is not —
+ * the user or the game put it there, and it is left alone.
+ */
+async function stillVortex(p: string, m: VortexManifest, f: VortexFile): Promise<boolean> {
+  const st = await fs.stat(p, { bigint: true }).catch(() => null);
+  if (!st?.isFile()) return false;
+  if (m.stagingPath) {
+    const src = await fs.stat(path.join(m.stagingPath, f.source, f.relPath), { bigint: true }).catch(() => null);
+    if (src?.isFile()) return (st.ino !== 0n && src.ino === st.ino && src.dev === st.dev) || src.size === st.size;
+  }
+  if (typeof f.time === 'number' && f.time > 1e12) return Number(st.mtimeMs) <= f.time + 60_000;
+  return true;
 }
 
 async function manifestsIn(dir: string): Promise<{ file: string; m: VortexManifest }[]> {
@@ -137,7 +164,7 @@ export async function vortexSources(env: DetectEnv, gameDirs: { defId: string; p
           rec.deployed.add(f.source);
           const at = path.join(target, f.target ?? '');
           // the list stays behind when Vortex is uninstalled: only files still there count
-          if (await exists(path.join(at, f.relPath))) rec.files++;
+          if (await stillVortex(path.join(at, f.relPath), m, f)) rec.files++;
           const prefix = path.relative(root, at).replace(/\\/g, '/');
           if (!rec.prefixOf.has(f.source)) rec.prefixOf.set(f.source, prefix);
           rec.winners[path.posix.join(prefix, f.relPath.replace(/\\/g, '/')).toLowerCase()] = f.source;
@@ -318,9 +345,9 @@ export async function scanManagers(env: DetectEnv, gameDirs: { defId: string; pa
 }
 
 /**
- * Files from Vortex's deployment lists that are really in the game folder now.
- * The lists stay behind when Vortex is uninstalled or the files are deleted by
- * hand; only files that exist count.
+ * Files from Vortex's deployment lists that are really in the game folder now
+ * and still Vortex's. The lists stay behind when Vortex is uninstalled or the
+ * files are deleted by hand; a file someone put in their place is not counted.
  */
 export async function vortexLeftovers(gameDir: string, def: GameDef, ours?: Set<string>): Promise<{ manifest: string; files: string[] }[]> {
   const out: { manifest: string; files: string[] }[] = [];
@@ -335,7 +362,7 @@ export async function vortexLeftovers(gameDir: string, def: GameDef, ours?: Set<
         const p = path.join(base, f.target ?? '', f.relPath);
         // a mod moved over from Vortex is deployed by Lattice to the same place: that file is ours now
         if (ours?.has(path.resolve(p).toLowerCase())) continue;
-        if (await exists(p)) files.push(p);
+        if (await stillVortex(p, m, f)) files.push(p);
       }
       out.push({ manifest: file, files });
     }
@@ -348,19 +375,35 @@ export async function vortexDeployedFiles(gameDir: string, def: GameDef, ours?: 
   return (await vortexLeftovers(gameDir, def, ours)).reduce((n, x) => n + x.files.length, 0);
 }
 
+/** Moves a file, also to another drive. */
+async function move(from: string, to: string) {
+  await fs.mkdir(path.dirname(to), { recursive: true });
+  try {
+    await fs.rename(from, to);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+    await fs.copyFile(from, to);
+    await fs.rm(from);
+  }
+}
+
 /**
- * Does what Vortex's Purge does when Vortex is gone: removes the files its lists
- * name, puts back the game files it had set aside (".vortex_backup"), and
- * retires the lists. Nothing else in the folder is touched.
+ * Does what Vortex's Purge does when Vortex is gone: moves the files its lists
+ * name (and that are still Vortex's) into `quarantine`, keeping their paths
+ * relative to the game folder, puts back the game files it had set aside
+ * (".vortex_backup"), and retires the lists. Nothing else is touched, and
+ * everything moved can be put back from the quarantine.
  */
-export async function removeVortexLeftovers(gameDir: string, def: GameDef, ours?: Set<string>): Promise<{ removed: number; restored: number; failed: string[] }> {
+export async function removeVortexLeftovers(gameDir: string, def: GameDef, quarantine: string, ours?: Set<string>): Promise<{ removed: number; restored: number; failed: string[] }> {
   let removed = 0;
   let restored = 0;
   const failed: string[] = [];
   for (const { manifest, files } of await vortexLeftovers(gameDir, def, ours)) {
     for (const p of files) {
+      const rel = path.relative(gameDir, p);
+      const dest = path.join(quarantine, rel.startsWith('..') || path.isAbsolute(rel) ? path.join('_outside', p.replace(/[:]/g, '')) : rel);
       try {
-        await fs.rm(p, { force: true });
+        await move(p, dest);
         removed++;
       } catch {
         failed.push(p);

@@ -745,7 +745,6 @@ const d: Dict = {
   k1fphv6k: "Disk space",
   keyxfso: "Downloaded files: {0} · prepared mod copies: {1} · needed by no profile or snapshot: {2}",
   kkybqfm: "Counting…",
-  k1psb7d0: "Lattice also clears what is not needed by itself after mods, profiles, collections or cancelled installs are removed.",
   ktha95h: "Freed: {0}",
   kwokvrp: "Free up",
   k1uqqqwj: "What starts the game",
@@ -766,6 +765,19 @@ const d: Dict = {
   k10akt3o: "If you still use Vortex, press Purge in it. If Vortex is uninstalled, Lattice removes these files by Vortex's own list and puts the game's original files back — nothing else is touched.",
   kgmmejz: "Could not remove: {0}. Close the game and try again.",
   k1rfce6y: "Programs",
+  k1s4072y: "The collection is built for {0}, but the profile is {1}. “Into a new profile” installs it as intended without touching this profile.",
+  kc04fyj: "Not for {0}",
+  k4jnjl4: "Versions will be picked for {0}; what has none, the plan shows before downloading",
+  k22anii: "A new {0} profile for this collection",
+  kfnx684: "Libraries are dependencies that three mods or more need: {0}",
+  kd4684e: "Hide libraries ({0})",
+  k1vpncmv: "Here because it is needed by: {0}",
+  k1rr1nk4: "Another {0} is kept only by snapshots: fewer snapshots, less space.",
+  kfs313a: "Quarantine (Vortex files taken out of the game): {0}. Kept for 7 days, then deleted by itself.",
+  kotdaav: "Lattice also clears what is not needed by itself: after mods, profiles, collections or cancelled installs are removed, and at start.",
+  k1u52qd8: "Snapshots per profile",
+  k1bg7r73: "The oldest snapshots are deleted when there are more. A snapshot keeps the mod files so a rollback works without downloading.",
+  k14isotf: "Vortex files ({0}) were moved to Lattice's quarantine for 7 days: Settings → Maintenance → “Disk space”.",
 };
 
 export default d;

@@ -8,6 +8,7 @@ import { Empty, StatusChip } from '../components/ui';
 import { CollectionSheet } from '../sheets/CollectionSheet';
 import { ImportSheet } from '../sheets/ImportSheet';
 import { t } from '../../shared/i18n';
+import { loaderFits } from '../../shared/context';
 
 function bump(v: string) {
   const m = /^(\d+)\.(\d+)\.(\d+)(.*)$/.exec(v);
@@ -68,6 +69,13 @@ export function Collections() {
               {mine.map((c) => {
                 const applied = profile.collections.includes(c.id);
                 const optional = c.mods.filter((m) => m.optional).length;
+                // made for another Minecraft version or loader: its locked versions would be swapped or fail here
+                const misfit =
+                  !applied &&
+                  ((!!c.game.gameVersion && !!profile.context.gameVersion && c.game.gameVersion !== profile.context.gameVersion) ||
+                    (!!c.game.loader && !!profile.context.loader && !loaderFits([c.game.loader], profile.context.loader)));
+                const built = [c.game.gameVersion, c.game.loader && (LOADER_LABEL[c.game.loader] ?? c.game.loader)].filter(Boolean).join(' · ');
+                const here = [profile.context.gameVersion, profile.context.loader && (LOADER_LABEL[profile.context.loader] ?? profile.context.loader)].filter(Boolean).join(' · ');
                 return (
                   <div key={c.id} className={`card coll ${applied ? 'applied' : ''}`}>
                     <div className="row">
@@ -80,6 +88,11 @@ export function Collections() {
                       </div>
                       <span className="chip outline mono">{c.version}</span>
                       {applied && <StatusChip tone="accent">{t('В профиле')}</StatusChip>}
+                      {misfit && (
+                        <StatusChip tone="warn" title={t('Коллекция собрана для {0}, а профиль — {1}. «В новый профиль» поставит её как задумано, не трогая этот профиль.', built, here)}>
+                          {t('Не для {0}', here)}
+                        </StatusChip>
+                      )}
                     </div>
                     {c.description && (
                       <p className="muted" style={{ margin: 0, fontSize: 'var(--fs-sm)' }}>
@@ -143,10 +156,14 @@ export function Collections() {
                         </>
                       ) : (
                         <>
-                          <button className="btn sm primary" onClick={() => openPlan(t('Коллекция «{0}»', c.name), () => api.planCollection(profile.id, c.id))}>
+                          <button
+                            className={`btn sm ${misfit ? '' : 'primary'}`}
+                            title={misfit ? t('Версии будут подобраны под {0}; чего нет — план покажет до скачивания', here) : undefined}
+                            onClick={() => openPlan(t('Коллекция «{0}»', c.name), () => api.planCollection(profile.id, c.id))}
+                          >
                             {t('Применить')}
                           </button>
-                          <button className="btn sm" onClick={() => toNewProfile(c)}>
+                          <button className={`btn sm ${misfit ? 'primary' : ''}`} title={misfit ? t('Новый профиль {0} под эту коллекцию', built) : undefined} onClick={() => toNewProfile(c)}>
                             {t('В новый профиль')}
                           </button>
                         </>

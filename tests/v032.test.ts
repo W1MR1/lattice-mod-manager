@@ -37,9 +37,12 @@ describe('Vortex leftovers after Vortex is gone', () => {
     await write(path.join(game, 'BepInEx', 'plugins', 'Mine.dll'), 'not from Vortex');
     expect(await vortexDeployedFiles(game, gameDef('valheim')!)).toBe(2);
 
-    const r = await removeVortexLeftovers(game, gameDef('valheim')!);
+    const quarantine = path.join(await tmp('vxq'), 'q');
+    const r = await removeVortexLeftovers(game, gameDef('valheim')!, quarantine);
     expect(r).toEqual({ removed: 2, restored: 1, failed: [] });
     expect(await exists(path.join(game, 'BepInEx', 'plugins', 'A.dll'))).toBe(false);
+    // nothing is lost: the file waits in the quarantine under its path in the game
+    expect(await fs.readFile(path.join(quarantine, 'BepInEx', 'plugins', 'A.dll'), 'utf8')).toBe('mod');
     expect(await fs.readFile(path.join(game, 'BepInEx', 'config', 'x.cfg'), 'utf8')).toBe('original');
     expect(await fs.readFile(path.join(game, 'BepInEx', 'plugins', 'Mine.dll'), 'utf8')).toBe('not from Vortex');
     expect(await exists(manifest)).toBe(false);

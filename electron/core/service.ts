@@ -44,7 +44,9 @@ import { detectAll, inspectFolder, launcherName, samePath, systemEnv, type Detec
 import { FomodRequired, inspectFomod, STAGED_PREFIX, safeName, stageVersion, walk } from './installer';
 import { computeOrder, providerIndex } from './loadorder';
 import { PLUGIN_EXT, pluginMasters, pluginsTxtPath, restorePluginsTxt, writePluginsTxt } from './plugins';
-import { resolvePlan, type ProjectMeta } from './resolver';
+import { resolvePlan, type ProjectMeta, type VersionProvider } from './resolver';
+import { violatesStrict } from '../../shared/versions';
+import { loaderFits } from '../../shared/context';
 import { Sources } from './sources';
 import { CurseForgeSource } from './sources/curseforge';
 import { removeVortexLeftovers, scanManagers, vortexDeployedFiles, type ImportSource } from './importers';
@@ -75,6 +77,8 @@ const plainSecrets: Secrets = {
 };
 
 const MAX_SNAPSHOTS = 30;
+/** how many versions of one mod a plan reads the jars of, newest first, looking for one that fits */
+const JAR_CHECKS = 8;
 
 export class Service extends EventEmitter {
   readonly store: Store;
@@ -337,7 +341,7 @@ export class Service extends EventEmitter {
           metas.push(meta);
         }
       }
-      if (metas.length) out.set(m.key, { ids: metas.flatMap((x) => x.ids), versions: Object.assign({}, ...metas.map((x) => x.versions)), depends: metas.flatMap((x) => x.depends), breaks: metas.flatMap((x) => x.breaks) });
+      if (metas.length) out.set(m.key, mergeJarMeta(metas));
     }
     return out;
   }
@@ -393,10 +397,65 @@ export class Service extends EventEmitter {
 
   async versions(ref: ModRef, profileId: string): Promise<ModVersion[]> {
     const p = this.profile(profileId);
-    return this.sources.provider(p.context).versions(ref, p.context);
+    return this.checkedProvider(p).versions(ref, p.context);
   }
 
   // ---------- planning
+
+  /** downloaded jars, by url: what they declare */
+  private jarOfUrl = new Map<string, JarMeta>();
+  /** versions left out of the last plan because their jars do not fit */
+  private jarRejected = 0;
+
+  /**
+   * Versions of a Minecraft mod that come without game versions or loaders
+   * (GitHub, GameBanana, hand-made collections) are checked by the jar itself
+   * before a plan offers them: newest first, until one fits. Those made for
+   * another Minecraft version or loader are left out, so the plan never picks
+   * them. A jar that cannot be read or downloaded is not held against a version.
+   */
+  private checkedProvider(p: Profile, overlay?: Map<string, ModVersion[]>, overlayMeta?: Map<string, ProjectMeta>): VersionProvider {
+    const base = this.sources.provider(p.context, overlay, overlayMeta);
+    const ctx = p.context;
+    const game = this.store.state.games.find((g) => g.id === p.gameId);
+    if (!game || this.defOf(game).kind !== 'minecraft' || (!ctx.gameVersion && !ctx.loader)) return base;
+    const unknown = (v: ModVersion) => v.files.some((f) => /\.jar$/i.test(f.filename)) && ((!v.gameVersions.length && !!ctx.gameVersion) || (!v.loaders.length && !!ctx.loader));
+    return {
+      meta: (refs) => base.meta(refs),
+      versions: async (ref, c) => {
+        const list = await base.versions(ref, c);
+        const drop = new Set<ModVersion>();
+        let checked = 0;
+        let found = false;
+        for (const v of [...list].sort((a, b) => Date.parse(b.published) - Date.parse(a.published))) {
+          if (found || !unknown(v)) continue;
+          if (checked++ >= JAR_CHECKS) {
+            drop.add(v); // older than everything checked, and nothing fitted so far
+            continue;
+          }
+          if (await this.jarFits(v, p).catch(() => true)) found = true;
+          else drop.add(v);
+        }
+        this.jarRejected += drop.size;
+        return list.filter((v) => !drop.has(v));
+      },
+    };
+  }
+
+  /** Do the jars of a version fit the profile's Minecraft version and loader? */
+  private async jarFits(v: ModVersion, p: Profile): Promise<boolean> {
+    for (const f of v.files.filter((x) => /\.jar$/i.test(x.filename))) {
+      let meta = this.jarOfUrl.get(f.url);
+      if (!meta) {
+        meta = await readJarMeta(await this.fetchFile(f, `${v.ref.projectId} ${v.version}`, p.gameId));
+        this.jarOfUrl.set(f.url, meta);
+      }
+      const mc = meta.depends.find((d) => d.id.toLowerCase() === 'minecraft');
+      if (mc && violatesStrict(p.context.gameVersion, mc.range)) return false;
+      if (p.context.loader && meta.loaders?.length && !loaderFits(meta.loaders, p.context.loader)) return false;
+    }
+    return true;
+  }
 
   private storePlan(plan: InstallPlan): InstallPlan {
     this.plans.set(plan.id, plan);
@@ -407,13 +466,17 @@ export class Service extends EventEmitter {
   async planInstall(profileId: string, requests: PlanRequest[], opts: { allowUpdates?: boolean; label?: string } = {}): Promise<InstallPlan> {
     const p = this.profile(profileId);
     const label = opts.label ?? (requests.length === 1 ? t('Установка «{0}»', requests[0].title ?? requests[0].ref.projectId) : t('Установка {0} модов', requests.length));
+    this.busy++; // jars checked while planning stay in the cache for the install
+    this.jarRejected = 0;
     const plan = await resolvePlan(
       { profile: p, requests, reason: 'explicit', includeRecommended: this.settings.includeRecommended, allowUpdates: opts.allowUpdates ?? true, label },
-      this.sources.provider(p.context),
+      this.checkedProvider(p),
       randomUUID(),
-    );
+    ).finally(() => this.busy--);
     attachChoices(plan, p);
-    return this.storePlan(plan);
+    this.storePlan(plan);
+    if (this.jarRejected) this.tidy();
+    return plan;
   }
 
   async planUpdates(profileId: string, keys?: string[]): Promise<InstallPlan> {
@@ -493,11 +556,13 @@ export class Service extends EventEmitter {
         requests.push({ ref: m.ref, versionId: m.versionId, title: m.title, by: `collection:${c.id}` });
       }
     }
+    this.busy++;
+    this.jarRejected = 0;
     const plan = await resolvePlan(
       { profile: p, requests, reason: 'collection', includeRecommended: false, allowUpdates: true, label: t('Коллекция «{0}»', target.name) },
-      this.sources.provider(p.context, overlay, overlayMeta),
+      this.checkedProvider(p, overlay, overlayMeta),
       randomUUID(),
-    );
+    ).finally(() => this.busy--);
     plan.issues = [...extra, ...plan.issues];
     plan.ok = !plan.issues.some((i) => i.severity === 'error');
     plan.collectionIds = chain.map((c) => c.id);
@@ -505,7 +570,9 @@ export class Service extends EventEmitter {
     const locked = new Map<string, FomodChoices>();
     for (const c of chain) for (const m of c.mods) if (m.choices) locked.set(keyOf(m.ref), m.choices);
     attachChoices(plan, p, locked);
-    return this.storePlan(plan);
+    this.storePlan(plan);
+    if (this.jarRejected) this.tidy();
+    return plan;
   }
 
   /** Applies a quick fix; returns a plan when the fix needs downloads. */
@@ -999,32 +1066,30 @@ export class Service extends EventEmitter {
   /** operations that are writing to the cache right now; cleaning waits for them */
   private busy = 0;
 
-  private async usedPaths() {
+  /** Folders of the cache that profiles and open plans use (`live`) and that only snapshots keep (`snap`). */
+  private usedPaths() {
     const norm = (p: string) => path.resolve(p).toLowerCase();
-    const staged = new Set<string>();
-    const downloads = new Set<string>();
-    const keepFiles = (files: ModFile[]) => {
-      for (const f of files) if (/^https?:|^nexus:/.test(f.url)) downloads.add(norm(path.dirname(this.cachePath(f))));
+    const live = new Set<string>();
+    const snap = new Set<string>();
+    const keep = (set: Set<string>, m: { stagedPath?: string; files: ModFile[] }) => {
+      if (m.stagedPath) set.add(norm(m.stagedPath));
+      for (const f of m.files) if (/^https?:|^nexus:/.test(f.url)) set.add(norm(path.dirname(this.cachePath(f))));
     };
-    const mods = [...this.store.state.profiles.flatMap((p) => Object.values(p.mods)), ...this.store.state.snapshots.flatMap((s) => Object.values(s.mods))];
-    for (const m of mods) {
-      if (m.stagedPath) staged.add(norm(m.stagedPath));
-      keepFiles(m.files);
-    }
+    for (const m of this.store.state.profiles.flatMap((p) => Object.values(p.mods))) keep(live, m);
     // a plan still on screen keeps what it has downloaded, so trying again does not download again
-    for (const plan of this.plans.values()) for (const it of [...plan.install, ...plan.update]) keepFiles(it.version.files);
-    return { staged, downloads, norm };
+    for (const plan of this.plans.values()) for (const it of [...plan.install, ...plan.update]) keep(live, { files: it.version.files });
+    for (const m of this.store.state.snapshots.flatMap((s) => Object.values(s.mods))) keep(snap, m);
+    return { live, snap, norm };
   }
 
-  /** Prepared copies and downloaded files that no profile, snapshot or open plan uses. */
-  private async unusedEntries(): Promise<{ path: string; size: number }[]> {
-    const { staged, downloads, norm } = await this.usedPaths();
+  /** Prepared copies and downloaded files no profile or open plan uses: kept only by snapshots, or by nothing. */
+  private async cacheEntries(): Promise<{ path: string; size: number; kind: 'unused' | 'snapshot' }[]> {
+    const { live, snap, norm } = this.usedPaths();
     const active = new Set(this.downloads.list().filter((d) => !['done', 'error', 'cancelled'].includes(d.state)).map((d) => d.filename.toLowerCase()));
-    const out: { path: string; size: number }[] = [];
-    const size = async (p: string) => {
-      let n = 0;
-      for (const rel of await walk(p).catch(() => [] as string[])) n += (await fs.stat(path.join(p, rel)).catch(() => null))?.size ?? 0;
-      return n;
+    const out: { path: string; size: number; kind: 'unused' | 'snapshot' }[] = [];
+    const add = async (p: string) => {
+      const k = norm(p);
+      if (!live.has(k)) out.push({ path: p, size: await dirSize(p), kind: snap.has(k) ? 'snapshot' : 'unused' });
     };
     const dirsOf = async (p: string) => (await fs.readdir(p, { withFileTypes: true }).catch(() => [])).filter((e) => e.isDirectory()).map((e) => path.join(p, e.name));
     const stagingRoot = this.dir('staging');
@@ -1032,33 +1097,50 @@ export class Service extends EventEmitter {
       const base = path.basename(gameDir);
       if (base === '_shared') continue; // modpack files collections point to
       if (base === '_import') {
-        out.push({ path: gameDir, size: await size(gameDir) }); // leftovers of unpacked modpacks
+        out.push({ path: gameDir, size: await dirSize(gameDir), kind: 'unused' }); // leftovers of unpacked modpacks
         continue;
       }
-      for (const modDir of await dirsOf(gameDir)) {
-        for (const verDir of await dirsOf(modDir)) if (!staged.has(norm(verDir))) out.push({ path: verDir, size: await size(verDir) });
-      }
+      for (const modDir of await dirsOf(gameDir)) for (const verDir of await dirsOf(modDir)) await add(verDir);
     }
     for (const a of await dirsOf(this.dir('downloads'))) {
       for (const b of await dirsOf(a)) {
-        if (downloads.has(norm(b))) continue;
         const files = await fs.readdir(b).catch(() => [] as string[]);
         if (files.some((f) => active.has(f.replace(/\.part$/, '').toLowerCase()))) continue;
-        out.push({ path: b, size: await size(b) });
+        await add(b);
       }
     }
     return out;
   }
 
-  /** How much space Lattice takes and how much of it nothing needs. */
-  async diskUsage(): Promise<{ downloads: number; staging: number; unused: number; unusedCount: number }> {
-    const total = async (p: string) => {
-      let n = 0;
-      for (const rel of await walk(p).catch(() => [] as string[])) n += (await fs.stat(path.join(p, rel)).catch(() => null))?.size ?? 0;
-      return n;
+  private async unusedEntries() {
+    return (await this.cacheEntries()).filter((e) => e.kind === 'unused');
+  }
+
+  /** How much space Lattice takes, how much only snapshots keep, and how much nothing needs. */
+  async diskUsage(): Promise<{ downloads: number; staging: number; unused: number; unusedCount: number; snapshots: number; snapshotCount: number; quarantine: number; quarantinePath: string }> {
+    const all = await this.cacheEntries();
+    const sum = (k: 'unused' | 'snapshot') => all.filter((e) => e.kind === k).reduce((a, x) => a + x.size, 0);
+    return {
+      downloads: await dirSize(this.dir('downloads')),
+      staging: await dirSize(this.dir('staging')),
+      unused: sum('unused'),
+      unusedCount: all.filter((e) => e.kind === 'unused').length,
+      snapshots: sum('snapshot'),
+      snapshotCount: this.store.state.snapshots.length,
+      quarantine: await dirSize(this.dir('quarantine')),
+      quarantinePath: this.dir('quarantine'),
     };
-    const unused = await this.unusedEntries();
-    return { downloads: await total(this.dir('downloads')), staging: await total(this.dir('staging')), unused: unused.reduce((a, x) => a + x.size, 0), unusedCount: unused.length };
+  }
+
+  /** At start: what a crash or a quick exit left behind, and quarantine older than a week. */
+  async cleanupOnStart() {
+    const week = Date.now() - 7 * 24 * 3600 * 1000;
+    for (const e of await fs.readdir(this.dir('quarantine'), { withFileTypes: true }).catch(() => [])) {
+      const born = Number(e.name.split('-')[0]);
+      if (e.isDirectory() && Number.isFinite(born) && born < week) await fs.rm(this.dir('quarantine', e.name), { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (!(await fs.readdir(this.dir('quarantine')).catch(() => ['x'])).length) await fs.rmdir(this.dir('quarantine')).catch(() => undefined);
+    await this.freeUnused().catch(() => undefined);
   }
 
   /** Deletes what nothing needs; empty mod folders go too. */
@@ -1617,8 +1699,9 @@ export class Service extends EventEmitter {
         } else if (pr.id.startsWith('deploy:') || pr.id.startsWith('stale:')) await this.deploy(pr.profileId!);
         else if (pr.id.startsWith('vortex:')) {
           const game = this.game(pr.gameId!);
-          const r = await removeVortexLeftovers(game.installPath, this.defOf(game), await this.ourFiles(game));
+          const r = await removeVortexLeftovers(game.installPath, this.defOf(game), this.dir('quarantine', `${Date.now()}-${game.id}`), await this.ourFiles(game));
           if (r.failed.length) throw new Error(t('Не удалось убрать: {0}. Закройте игру и попробуйте снова.', r.failed.slice(0, 3).join(', ')));
+          if (r.removed) this.toast('ok', t('Файлы Vortex ({0}) перенесены в карантин Lattice на 7 дней: Настройки → Обслуживание → «Место на диске».', r.removed));
           await this.redeploy(game.activeProfileId);
         } else if (pr.id.startsWith('mcver:')) {
           const p = this.profile(pr.profileId!);
@@ -1778,15 +1861,23 @@ export class Service extends EventEmitter {
       rules: structuredClone(p.rules),
       collections: [...p.collections],
     };
-    const all = this.store.state.snapshots;
-    all.unshift(s);
-    const mine = all.filter((x) => x.profileId === profileId);
-    if (mine.length > MAX_SNAPSHOTS) {
-      const drop = new Set(mine.slice(MAX_SNAPSHOTS).map((x) => x.id));
-      this.store.state.snapshots = all.filter((x) => !drop.has(x.id));
-    }
+    this.store.state.snapshots.unshift(s);
+    this.trimSnapshots();
     this.changed();
     return s;
+  }
+
+  /** Keeps the newest snapshots of each profile, as many as the settings say. */
+  private trimSnapshots() {
+    const limit = this.settings.snapshotLimit ?? MAX_SNAPSHOTS;
+    const count = new Map<string, number>();
+    const before = this.store.state.snapshots.length;
+    this.store.state.snapshots = this.store.state.snapshots.filter((x) => {
+      const n = (count.get(x.profileId) ?? 0) + 1;
+      count.set(x.profileId, n);
+      return n <= limit;
+    });
+    return before - this.store.state.snapshots.length;
   }
 
   async rollback(snapshotId: string) {
@@ -1826,12 +1917,22 @@ export class Service extends EventEmitter {
     next.maxParallelDownloads = clamp(next.maxParallelDownloads, 1, 32);
     next.maxConnectionsPerFile = clamp(next.maxConnectionsPerFile, 1, 32);
     next.minSegmentMiB = clamp(next.minSegmentMiB, 0.25, 64);
+    if (next.snapshotLimit !== undefined) next.snapshotLimit = Math.round(clamp(next.snapshotLimit, 3, 100));
     next.trustedHosts = [...new Set(next.trustedHosts.map((h) => h.trim().toLowerCase()).filter(Boolean))];
     if (next.language && !LANGS.some((l) => l.id === next.language)) next.language = this.settings.language;
     if (next.language) setLang(next.language);
     this.store.state.settings = next;
+    // fewer snapshots allowed: the oldest go now, and what only they kept is freed
+    if (this.trimSnapshots() > 0) this.tidy();
     this.changed();
   }
+}
+
+/** Bytes in a folder and everything under it. */
+async function dirSize(p: string): Promise<number> {
+  let n = 0;
+  for (const rel of await walk(p).catch(() => [] as string[])) n += (await fs.stat(path.join(p, rel)).catch(() => null))?.size ?? 0;
+  return n;
 }
 
 /** Carries known FOMOD options into a plan: the last install's, or a collection's lock. */
@@ -1872,4 +1973,15 @@ function lockedMessage(failed: DeployFailure[]): string {
     plural(failed.length, 'файл', 'файла', 'файлов'),
     sample,
   );
+}
+
+/** One mod's jars (a main jar and add-ons) as one declaration. */
+function mergeJarMeta(metas: JarMeta[]): JarMeta {
+  return {
+    ids: metas.flatMap((x) => x.ids),
+    versions: Object.assign({}, ...metas.map((x) => x.versions)),
+    depends: metas.flatMap((x) => x.depends),
+    breaks: metas.flatMap((x) => x.breaks),
+    loaders: [...new Set(metas.flatMap((x) => x.loaders ?? []))],
+  };
 }

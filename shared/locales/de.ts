@@ -745,7 +745,6 @@ const d: Dict = {
   k1fphv6k: "Speicherplatz",
   keyxfso: "Heruntergeladene Dateien: {0} · vorbereitete Mod-Kopien: {1} · von keinem Profil oder Snapshot gebraucht: {2}",
   kkybqfm: "Wird berechnet…",
-  k1psb7d0: "Lattice räumt Unnötiges auch selbst auf, nachdem Mods, Profile, Sammlungen oder abgebrochene Installationen entfernt wurden.",
   ktha95h: "Freigegeben: {0}",
   kwokvrp: "Freigeben",
   k1uqqqwj: "Womit starten",
@@ -766,6 +765,19 @@ const d: Dict = {
   k10akt3o: "Wenn du Vortex noch nutzt, klicke dort auf Purge. Ist Vortex deinstalliert, entfernt Lattice diese Dateien nach der eigenen Liste von Vortex und stellt die Originaldateien des Spiels wieder her – sonst wird nichts angefasst.",
   kgmmejz: "Entfernen fehlgeschlagen: {0}. Schließe das Spiel und versuche es erneut.",
   k1rfce6y: "Programme",
+  k1s4072y: "Die Sammlung ist für {0} gemacht, das Profil ist aber {1}. „In neues Profil“ installiert sie wie gedacht, ohne dieses Profil anzufassen.",
+  kc04fyj: "Nicht für {0}",
+  k4jnjl4: "Versionen werden für {0} gewählt; was keine hat, zeigt der Plan vor dem Herunterladen",
+  k22anii: "Ein neues Profil {0} für diese Sammlung",
+  kfnx684: "Bibliotheken sind Abhängigkeiten, die drei oder mehr Mods brauchen: {0}",
+  kd4684e: "Bibliotheken ausblenden ({0})",
+  k1vpncmv: "Hier, weil es gebraucht wird von: {0}",
+  k1rr1nk4: "Weitere {0} halten nur Snapshots: weniger Snapshots, weniger Platz.",
+  kfs313a: "Quarantäne (aus dem Spiel genommene Vortex-Dateien): {0}. Wird 7 Tage aufbewahrt und dann selbst gelöscht.",
+  kotdaav: "Lattice räumt Unnötiges auch selbst auf: nach dem Entfernen von Mods, Profilen, Sammlungen oder abgebrochenen Installationen und beim Start.",
+  k1u52qd8: "Snapshots pro Profil",
+  k1bg7r73: "Sind es mehr, werden die ältesten Snapshots gelöscht. Ein Snapshot behält die Mod-Dateien, damit ein Zurücksetzen ohne Herunterladen funktioniert.",
+  k14isotf: "Vortex-Dateien ({0}) wurden für 7 Tage in die Quarantäne von Lattice verschoben: Einstellungen → Wartung → „Speicherplatz“.",
 };
 
 export default d;

@@ -387,6 +387,8 @@ export interface Settings {
   modrinthToken?: string;
   /** default trusted hosts already offered once; a host the user removed is not added back */
   trustedHostsSeen?: string[];
+  /** snapshots kept per profile (30 when unset) */
+  snapshotLimit?: number;
 }
 
 export interface AppState {

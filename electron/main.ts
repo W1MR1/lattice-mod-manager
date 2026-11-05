@@ -221,6 +221,9 @@ async function runSmoke() {
       log.push(`collection guard ok: ${(e as Error).message}`);
     }
     await service.switchProfile(game.id, profileId);
+    // a collection made for another Minecraft: the card must say so before anything is downloaded
+    const older = service.createCollection(profileId, { name: 'Старая сборка', version: '0.9.0', author: 'smoke', description: '1.20.1' });
+    older.game = { ...older.game, gameVersion: '1.20.1' };
 
     if (process.argv.includes('--fixes')) {
       // start-up check: a deployed file goes missing, repair puts it back
@@ -303,6 +306,16 @@ async function runSmoke() {
     await wait(r === 'discover' ? 4000 : 1500);
     const img = await win.webContents.capturePage();
     await fs.writeFile(path.join(outDir, `${r}.png`), img.toPNG());
+    // the graph from far away: names give way to the overview
+    if (r === 'graph') {
+      for (const [part, presses] of [['far', 4], ['farther', 9]] as const) {
+        await win.webContents.executeJavaScript(
+          `(() => { const el = document.querySelector('.graph-wrap'); el.focus(); for (let i = 0; i < ${presses}; i++) el.dispatchEvent(new KeyboardEvent('keydown', { key: '-', bubbles: true })); })()`,
+        );
+        await wait(600);
+        await fs.writeFile(path.join(outDir, `${r}-${part}.png`), (await win.webContents.capturePage()).toPNG());
+      }
+    }
     // long screens: also the middle and the end
     if (r === 'settings') {
       for (const [part, at] of [['2', 0.5], ['3', 0.8], ['4', 1]] as const) {
@@ -481,6 +494,8 @@ app.whenReady().then(async () => {
   trace('window loaded');
   for (const url of pendingNxm.splice(0)) openNxm(url);
   setupUpdates();
+  // what a crash or a quick exit left in the cache, a little after the window is up
+  if (!smoke) setTimeout(() => void service.cleanupOnStart().catch((e) => trace(`cleanup: ${(e as Error).message}`)), 15_000);
   if (smoke) void runSmoke().catch((e) => trace(`smoke failed: ${(e as Error).stack}`));
 });
 

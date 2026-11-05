@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpRight, LocateFixed, Maximize, Network, Search, ZoomIn, ZoomOut } from 'lucide-react';
 import type { CompatReport, Profile } from '../../shared/types';
 import { keyOf } from '../../shared/types';
@@ -7,6 +7,7 @@ import { useActive, useUI } from '../store';
 import { Empty, HealthRing, SevIcon } from '../components/ui';
 import { runFix } from './Mods';
 import { t } from '../../shared/i18n';
+import { whyInstalled } from '../../shared/why';
 
 const W = 196;
 const H = 38;
@@ -31,17 +32,18 @@ interface GEdge {
   kind: 'req' | 'rec' | 'conflict';
 }
 
-function layout(profile: Profile, report: CompatReport | null) {
-  const mods = Object.values(profile.mods);
+function layout(profile: Profile, report: CompatReport | null, skip: Set<string>) {
+  const mods = Object.values(profile.mods).filter((m) => !skip.has(m.key));
   const keys = new Set(mods.map((m) => m.key));
   const providers = new Map<string, string>();
-  for (const m of mods) for (const p of m.provides ?? []) providers.set(p, m.key);
+  for (const m of Object.values(profile.mods)) for (const p of m.provides ?? []) providers.set(p, m.key);
   const ghosts = new Map<string, string>();
   const edges: GEdge[] = [];
   for (const m of mods) {
     for (const d of m.deps) {
       if (d.kind === 'embedded') continue;
       const k = keyOf(d.ref);
+      if (skip.has(k) || skip.has(providers.get(k) ?? '')) continue; // a hidden library
       const target = keys.has(k) ? k : providers.get(k);
       if (d.kind === 'conflicts') {
         if (target) edges.push({ from: target, to: m.key, kind: 'conflict' });
@@ -116,6 +118,108 @@ function layout(profile: Profile, report: CompatReport | null) {
   return { nodes, edges, width, height };
 }
 
+/** Everything the picked mod needs and everything that needs it, all the way. */
+function chainOf(g: { edges: GEdge[] }, picked: string): Set<string> {
+  const chain = new Set<string>([picked]);
+  const walk = (k: string, dir: 'up' | 'down') => {
+    for (const e of g.edges) {
+      const next = dir === 'up' ? (e.to === k ? e.from : null) : e.from === k ? e.to : null;
+      if (next && !chain.has(next)) {
+        chain.add(next);
+        walk(next, dir);
+      }
+    }
+  };
+  walk(picked, 'up');
+  walk(picked, 'down');
+  return chain;
+}
+
+interface SceneProps {
+  g: { nodes: GNode[]; edges: GEdge[] };
+  lod: 'full' | 'title' | 'dot';
+  bigFont: number;
+  bigChars: number;
+  focus: string | null;
+  picked: string | null;
+  only: boolean;
+  drag: React.MutableRefObject<{ moved: boolean } | null>;
+  onPick: (k: string | null) => void;
+  onHover: (k: string | null) => void;
+  onOpen: (k: string) => void;
+}
+
+/**
+ * Edges and nodes. Moving the view only changes the transform around them, so
+ * this part is not redrawn while the graph is dragged — big graphs stay smooth.
+ */
+const Scene = memo(
+  function Scene({ g, lod, bigFont, bigChars, focus, picked, only, drag, onPick, onHover, onOpen }: SceneProps) {
+    const pos = useMemo(() => new Map(g.nodes.map((n) => [n.key, n])), [g]);
+    const chain = useMemo(() => (only && picked ? chainOf(g, picked) : null), [g, only, picked]);
+    const hidden = (k: string) => !!chain && !chain.has(k);
+    const near = new Set<string>(focus ? [focus, ...g.edges.filter((e) => e.from === focus || e.to === focus).flatMap((e) => [e.from, e.to])] : []);
+    return (
+      <>
+        {g.edges.map((e, i) => {
+          const a = pos.get(e.from);
+          const b = pos.get(e.to);
+          if (!a || !b || hidden(e.from) || hidden(e.to)) return null;
+          const sameCol = a.x === b.x;
+          const x1 = a.x + W;
+          const y1 = a.y + H / 2;
+          const x2 = sameCol ? b.x + W : b.x;
+          const y2 = b.y + H / 2;
+          const d = sameCol ? `M${x1} ${y1} C${x1 + 60} ${y1}, ${x2 + 60} ${y2}, ${x2} ${y2}` : `M${x1} ${y1} C${x1 + 70} ${y1}, ${x2 - 70} ${y2}, ${x2} ${y2}`;
+          const hl = focus && (e.from === focus || e.to === focus);
+          return <path key={i} d={d} className={`graph-edge ${e.kind === 'rec' ? 'rec' : e.kind === 'conflict' ? 'conflict' : ''} ${hl && e.kind !== 'conflict' ? 'hl' : ''} ${focus && !hl ? 'graph-dim' : ''}`} />;
+        })}
+        {g.nodes
+          .filter((n) => !hidden(n.key))
+          .map((n) => (
+            <g
+              key={n.key}
+              className={`graph-node ${n.ghost ? 'ghost' : ''} ${!n.enabled && !n.ghost ? 'off' : ''} ${picked === n.key ? 'sel' : ''} ${focus && !near.has(n.key) ? 'graph-dim' : ''}`}
+              transform={`translate(${n.x} ${n.y})`}
+              onMouseEnter={() => onHover(n.key)}
+              onMouseLeave={() => onHover(null)}
+              onClick={() => {
+                if (drag.current?.moved) return;
+                onPick(n.key === picked ? null : n.key);
+              }}
+              onDoubleClick={() => !n.ghost && onOpen(n.key)}
+              role="button"
+              aria-label={`${n.title}, ${n.version}`}
+            >
+              <rect width={W} height={H} rx={8} />
+              <circle cx={16} cy={H / 2} r={7} fill={TONE_VAR[n.tone]} />
+              <text x={16} y={H / 2 + 0.5} textAnchor="middle" dominantBaseline="central" style={{ fill: 'var(--bg-1)', fontSize: 10, fontWeight: 800 }}>
+                {GLYPH[n.tone]}
+              </text>
+              {lod === 'full' && (
+                <>
+                  <text x={30} y={15}>
+                    {n.title.length > 24 ? `${n.title.slice(0, 23)}…` : n.title}
+                  </text>
+                  <text x={30} y={29} className="sub">
+                    {n.version.length > 28 ? `${n.version.slice(0, 27)}…` : n.version}
+                  </text>
+                </>
+              )}
+              {lod === 'title' && (
+                <text x={30} y={H / 2 + 1} dominantBaseline="central" style={{ fontSize: bigFont }}>
+                  {n.title.length > bigChars ? `${n.title.slice(0, bigChars - 1)}…` : n.title}
+                </text>
+              )}
+            </g>
+          ))}
+      </>
+    );
+  },
+  // the open-mod callback is new on every render but does the same thing
+  (a, b) => a.g === b.g && a.lod === b.lod && a.bigFont === b.bigFont && a.bigChars === b.bigChars && a.focus === b.focus && a.picked === b.picked && a.only === b.only,
+);
+
 function avg(xs: number[]) {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined;
 }
@@ -132,7 +236,18 @@ export function Graph() {
   const [picked, setPicked] = useState<string | null>(null);
   const [only, setOnly] = useState(false);
   const [query, setQuery] = useState('');
-  const g = useMemo(() => (profile ? layout(profile, report) : null), [profile, report]);
+  const [hideLibs, setHideLibs] = useState(false);
+  // libraries: pulled in as dependencies, needed by three mods or more, and without problems
+  const libs = useMemo(() => {
+    const out = new Set<string>();
+    if (!profile) return out;
+    const users = new Map<string, number>();
+    for (const m of Object.values(profile.mods)) for (const d of m.deps) if (d.kind === 'requires') users.set(keyOf(d.ref), (users.get(keyOf(d.ref)) ?? 0) + 1);
+    const troubled = new Set((report?.issues ?? []).filter((i) => i.severity !== 'info').map((i) => i.subject));
+    for (const m of Object.values(profile.mods)) if (m.reason === 'dependency' && (users.get(m.key) ?? 0) >= 3 && !troubled.has(m.key)) out.add(m.key);
+    return out;
+  }, [profile, report]);
+  const g = useMemo(() => (profile ? layout(profile, report, hideLibs ? libs : new Set()) : null), [profile, report, hideLibs, libs]);
 
   // ---- view: pan (x, y) and zoom (k) of the graph inside its frame
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -205,25 +320,15 @@ export function Graph() {
 
   const pos = new Map(g.nodes.map((n) => [n.key, n]));
   const focus = hover ?? picked;
-  const near = new Set<string>(focus ? [focus, ...g.edges.filter((e) => e.from === focus || e.to === focus).flatMap((e) => [e.from, e.to])] : []);
   // "only its links": everything the picked mod needs and everything that needs it, all the way
-  const chain = new Set<string>();
-  if (only && picked) {
-    const walk = (k: string, dir: 'up' | 'down') => {
-      for (const e of g.edges) {
-        const next = dir === 'up' ? (e.to === k ? e.from : null) : e.from === k ? e.to : null;
-        if (next && !chain.has(next)) {
-          chain.add(next);
-          walk(next, dir);
-        }
-      }
-    };
-    chain.add(picked);
-    walk(picked, 'up');
-    walk(picked, 'down');
-  }
-  const hidden = (k: string) => only && !!picked && !chain.has(k);
+  const chain = only && picked ? chainOf(g, picked) : null;
+  const hidden = (k: string) => !!chain && !chain.has(k);
   const v = view ?? { x: 0, y: 0, k: 1 };
+  // far out, the version line and then all names go; names of problems, the picked and the hovered mod float above
+  const lod: 'full' | 'title' | 'dot' = v.k >= 0.55 ? 'full' : v.k >= 0.28 ? 'title' : 'dot';
+  const bigFont = Math.round(Math.min(26, 11 / v.k));
+  const bigChars = Math.max(6, Math.floor((W - 34) / (bigFont * 0.58)));
+  const floating = lod === 'full' ? [] : g.nodes.filter((n) => !hidden(n.key) && (n.key === hover || (lod === 'dot' && (n.key === picked || n.tone === 'err' || n.tone === 'warn')))).slice(0, 40);
   const find = (text: string) => {
     const q = text.trim().toLowerCase();
     if (!q) return;
@@ -236,6 +341,7 @@ export function Graph() {
   const issues = report?.issues ?? [];
   const pickedNode = picked ? pos.get(picked) : undefined;
   const pickedIssues = picked ? issues.filter((i) => i.subject === picked || i.related.includes(picked)) : [];
+  const why = picked ? whyInstalled(picked, profile) : null;
 
   return (
     <div className="content">
@@ -269,6 +375,15 @@ export function Graph() {
             <input type="checkbox" checked={only} disabled={!picked} onChange={(e) => setOnly(e.target.checked)} />
             {t('Только связи выбранного')}
           </label>
+          {libs.size > 0 && (
+            <label
+              className="row muted"
+              title={t('Библиотеки — зависимости, которые нужны трём модам и больше: {0}', [...libs].map((k) => profile.mods[k]?.title ?? k).join(', '))}
+            >
+              <input type="checkbox" checked={hideLibs} onChange={(e) => setHideLibs(e.target.checked)} />
+              {t('Скрыть библиотеки ({0})', libs.size)}
+            </label>
+          )}
         </div>
         <div
           className="graph-wrap"
@@ -307,54 +422,18 @@ export function Graph() {
         >
           <svg width="100%" height="100%" role="img" aria-label={t('Граф связей: {0} узлов', g.nodes.length)}>
             <g transform={`translate(${v.x} ${v.y}) scale(${v.k})`}>
-            {g.edges.map((e, i) => {
-              const a = pos.get(e.from);
-              const b = pos.get(e.to);
-              if (!a || !b) return null;
-              const sameCol = a.x === b.x;
-              const x1 = sameCol ? a.x + W : a.x + W;
-              const y1 = a.y + H / 2;
-              const x2 = sameCol ? b.x + W : b.x;
-              const y2 = b.y + H / 2;
-              const d = sameCol ? `M${x1} ${y1} C${x1 + 60} ${y1}, ${x2 + 60} ${y2}, ${x2} ${y2}` : `M${x1} ${y1} C${x1 + 70} ${y1}, ${x2 - 70} ${y2}, ${x2} ${y2}`;
-              const hl = focus && (e.from === focus || e.to === focus);
-              if (hidden(e.from) || hidden(e.to)) return null;
-              return <path key={i} d={d} className={`graph-edge ${e.kind === 'rec' ? 'rec' : e.kind === 'conflict' ? 'conflict' : ''} ${hl && e.kind !== 'conflict' ? 'hl' : ''} ${focus && !hl ? 'graph-dim' : ''}`} />;
-            })}
-            {g.nodes.filter((n) => !hidden(n.key)).map((n) => (
-              <g
-                key={n.key}
-                className={`graph-node ${n.ghost ? 'ghost' : ''} ${!n.enabled && !n.ghost ? 'off' : ''} ${picked === n.key ? 'sel' : ''} ${focus && !near.has(n.key) ? 'graph-dim' : ''}`}
-                transform={`translate(${n.x} ${n.y})`}
-                onMouseEnter={() => setHover(n.key)}
-                onMouseLeave={() => setHover(null)}
-                onClick={() => {
-                  if (drag.current?.moved) return;
-                  setPicked(n.key === picked ? null : n.key);
-                }}
-                onDoubleClick={() => {
-                  if (n.ghost) return;
-                  select(n.key);
-                  go('mods');
-                }}
-                role="button"
-                aria-label={`${n.title}, ${n.version}`}
-              >
-                <rect width={W} height={H} rx={8} />
-                <circle cx={16} cy={H / 2} r={7} fill={TONE_VAR[n.tone]} />
-                <text x={16} y={H / 2 + 0.5} textAnchor="middle" dominantBaseline="central" style={{ fill: 'var(--bg-1)', fontSize: 10, fontWeight: 800 }}>
-                  {GLYPH[n.tone]}
-                </text>
-                <text x={30} y={15}>
-                  {n.title.length > 24 ? `${n.title.slice(0, 23)}…` : n.title}
-                </text>
-                <text x={30} y={29} className="sub">
-                  {n.version.length > 28 ? `${n.version.slice(0, 27)}…` : n.version}
-                </text>
-              </g>
-            ))}
+            <Scene g={g} lod={lod} bigFont={bigFont} bigChars={bigChars} focus={focus} picked={picked} only={only} drag={drag} onPick={setPicked} onHover={setHover} onOpen={(k) => {
+              select(k);
+              go('mods');
+            }} />
             </g>
           </svg>
+          {floating.map((n) => (
+            <div key={n.key} className={`graph-float ${n.tone}`} style={{ left: (n.x + W / 2) * v.k + v.x, top: n.y * v.k + v.y }}>
+              {n.title}
+              {n.key === hover && <span className="mono faint"> {n.version}</span>}
+            </div>
+          ))}
           <Minimap g={g} view={v} size={size} picked={picked} onMove={(cx, cy) => setView({ ...v, x: size.w / 2 - cx * v.k, y: size.h / 2 - cy * v.k })} />
           <div className="graph-controls" onPointerDown={(e) => e.stopPropagation()}>
             <button className="btn sm icon" title={t('Отдалить (−)')} aria-label={t('Отдалить (−)')} onClick={() => zoomAt(1 / 1.25)}>
@@ -392,6 +471,11 @@ export function Graph() {
           <div className="card card-pad col">
             <b>{pickedNode.title}</b>
             <span className="mono muted">{pickedNode.version}</span>
+            {why && why.length > 1 && (
+              <span className="muted" style={{ fontSize: 'var(--fs-sm)' }}>
+                {t('Здесь потому, что нужен: {0}', why.slice(1).map((k) => profile.mods[k]?.title ?? k).join(' → '))}
+              </span>
+            )}
             {pickedIssues.length === 0 && <span className="faint">{t('Проблем нет.')}</span>}
             {!pickedNode.ghost && (
               <button

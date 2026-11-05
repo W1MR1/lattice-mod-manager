@@ -745,7 +745,6 @@ const d: Dict = {
   k1fphv6k: "Espacio en disco",
   keyxfso: "Archivos descargados: {0} · copias preparadas de mods: {1} · que no necesita ningún perfil ni instantánea: {2}",
   kkybqfm: "Calculando…",
-  k1psb7d0: "Lattice también limpia por sí solo lo innecesario después de eliminar mods, perfiles, colecciones o instalaciones canceladas.",
   ktha95h: "Liberado: {0}",
   kwokvrp: "Liberar",
   k1uqqqwj: "Con qué se inicia",
@@ -766,6 +765,19 @@ const d: Dict = {
   k10akt3o: "Si aún usas Vortex, pulsa Purge en él. Si Vortex está desinstalado, Lattice quitará estos archivos según la propia lista de Vortex y restaurará los archivos originales del juego; no toca nada más.",
   kgmmejz: "No se pudo quitar: {0}. Cierra el juego e inténtalo de nuevo.",
   k1rfce6y: "Programas",
+  k1s4072y: "La colección está hecha para {0}, pero el perfil es {1}. «En un perfil nuevo» la instala como se pensó, sin tocar este perfil.",
+  kc04fyj: "No es para {0}",
+  k4jnjl4: "Se elegirán versiones para {0}; lo que no tenga, el plan lo mostrará antes de descargar",
+  k22anii: "Un perfil nuevo {0} para esta colección",
+  kfnx684: "Las bibliotecas son dependencias que necesitan tres mods o más: {0}",
+  kd4684e: "Ocultar bibliotecas ({0})",
+  k1vpncmv: "Está aquí porque lo necesita: {0}",
+  k1rr1nk4: "Otros {0} los guardan solo las instantáneas: menos instantáneas, menos espacio.",
+  kfs313a: "Cuarentena (archivos de Vortex sacados del juego): {0}. Se guarda 7 días y luego se borra sola.",
+  kotdaav: "Lattice también limpia por sí solo lo innecesario: después de eliminar mods, perfiles, colecciones o instalaciones canceladas, y al iniciar.",
+  k1u52qd8: "Instantáneas por perfil",
+  k1bg7r73: "Cuando hay más, se borran las instantáneas más antiguas. Una instantánea guarda los archivos de los mods para que la reversión funcione sin descargar.",
+  k14isotf: "Los archivos de Vortex ({0}) se movieron a la cuarentena de Lattice durante 7 días: Ajustes → Mantenimiento → «Espacio en disco».",
 };
 
 export default d;

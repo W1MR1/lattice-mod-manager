@@ -132,7 +132,7 @@ function NexusSection() {
 }
 
 /** Space Lattice takes, and freeing what no profile, snapshot or open plan needs. */
-function DiskField() {
+function DiskField({ limit, onLimit }: { limit: number; onLimit: (v: number) => void }) {
   const run = useUI((x) => x.run);
   const [u, setU] = useState<Awaited<ReturnType<typeof api.diskUsage>> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -145,6 +145,7 @@ function DiskField() {
     void load();
   }, []);
   return (
+    <>
     <div className="field">
       <div className="grow">
         {t('Место на диске')}
@@ -152,8 +153,23 @@ function DiskField() {
           {u
             ? t('Скачанные файлы: {0} · подготовленные копии модов: {1} · не нужны ни одному профилю и снимку: {2}', bytes(u.downloads), bytes(u.staging), bytes(u.unused))
             : t('Считаем…')}
+          {u && u.snapshots > 0 && (
+            <>
+              <br />
+              {t('Ещё {0} держат только снимки: меньше снимков — меньше места.', bytes(u.snapshots))}
+            </>
+          )}
+          {u && u.quarantine > 0 && (
+            <>
+              <br />
+              {t('Карантин (файлы Vortex, убранные из игры): {0}. Хранится 7 дней, потом удаляется сам.', bytes(u.quarantine))}{' '}
+              <button className="text-link" onClick={() => void bridge.openPath(u.quarantinePath)}>
+                {t('Открыть')}
+              </button>
+            </>
+          )}
           <br />
-          {t('Ненужное Lattice убирает и сам после удаления модов, профилей, коллекций и отменённых установок.')}
+          {t('Ненужное Lattice убирает и сам: после удаления модов, профилей, коллекций и отменённых установок, а также при запуске.')}
         </small>
       </div>
       <button
@@ -170,6 +186,22 @@ function DiskField() {
         {busy && <Spinner />} {t('Освободить')}
       </button>
     </div>
+    <div className="field">
+      <div className="grow">
+        {t('Снимков на профиль')}
+        <small>{t('Самые старые снимки удаляются, когда их становится больше. Снимок держит файлы модов, чтобы откат работал без скачивания.')}</small>
+      </div>
+      <Stepper
+        value={limit}
+        min={3}
+        max={100}
+        onChange={(v) => {
+          onLimit(v);
+          setTimeout(() => void load(), 1500);
+        }}
+      />
+    </div>
+    </>
   );
 }
 
@@ -539,7 +571,7 @@ export function Settings() {
                   <ShieldCheck size={13} /> {t('Проверить')}
                 </button>
               </div>
-              <DiskField />
+              <DiskField limit={s.snapshotLimit ?? 30} onLimit={(v) => set({ snapshotLimit: v })} />
               <div className="field">
                 <div className="grow">
                   {t('Обновления Lattice')}

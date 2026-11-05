@@ -745,7 +745,6 @@ const d: Dict = {
   k1fphv6k: "Espaço em disco",
   keyxfso: "Arquivos baixados: {0} · cópias preparadas de mods: {1} · que nenhum perfil ou snapshot usa: {2}",
   kkybqfm: "Calculando…",
-  k1psb7d0: "O Lattice também limpa sozinho o que não é necessário depois de remover mods, perfis, coleções ou instalações canceladas.",
   ktha95h: "Liberado: {0}",
   kwokvrp: "Liberar",
   k1uqqqwj: "O que inicia o jogo",
@@ -766,6 +765,19 @@ const d: Dict = {
   k10akt3o: "Se você ainda usa o Vortex, clique em Purge nele. Se o Vortex foi desinstalado, o Lattice remove esses arquivos pela própria lista do Vortex e devolve os arquivos originais do jogo — nada mais é mexido.",
   kgmmejz: "Não foi possível remover: {0}. Feche o jogo e tente de novo.",
   k1rfce6y: "Programas",
+  k1s4072y: "A coleção foi feita para {0}, mas o perfil é {1}. “Em um novo perfil” a instala como planejado, sem mexer neste perfil.",
+  kc04fyj: "Não é para {0}",
+  k4jnjl4: "As versões serão escolhidas para {0}; o que não tiver, o plano mostra antes de baixar",
+  k22anii: "Um perfil novo {0} para esta coleção",
+  kfnx684: "Bibliotecas são dependências de que três mods ou mais precisam: {0}",
+  kd4684e: "Ocultar bibliotecas ({0})",
+  k1vpncmv: "Está aqui porque é necessário para: {0}",
+  k1rr1nk4: "Mais {0} são mantidos só por snapshots: menos snapshots, menos espaço.",
+  kfs313a: "Quarentena (arquivos do Vortex tirados do jogo): {0}. Fica guardada 7 dias e depois é apagada sozinha.",
+  kotdaav: "O Lattice também limpa sozinho o que não é necessário: depois de remover mods, perfis, coleções ou instalações canceladas, e ao iniciar.",
+  k1u52qd8: "Snapshots por perfil",
+  k1bg7r73: "Quando há mais, os snapshots mais antigos são apagados. Um snapshot guarda os arquivos dos mods para que a reversão funcione sem baixar.",
+  k14isotf: "Os arquivos do Vortex ({0}) foram movidos para a quarentena do Lattice por 7 dias: Configurações → Manutenção → “Espaço em disco”.",
 };
 
 export default d;
