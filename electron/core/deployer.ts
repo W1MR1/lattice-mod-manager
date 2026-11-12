@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { DeployResult, InstalledMod } from '../../shared/types';
 import type { FileOverlap } from './compat';
 import { walk } from './installer';
+import { GAME_ROOT } from './layout';
 
 interface Owned {
   rel: string;
@@ -17,6 +18,8 @@ interface Owned {
 
 interface Manifest {
   root: string;
+  /** the game folder, for files that go beside the deploy root (staged under GAME_ROOT) */
+  gameRoot?: string;
   files: Record<string, Owned>;
   backups: string[];
   createdDirs: string[];
@@ -24,6 +27,18 @@ interface Manifest {
 }
 
 const norm = (rel: string) => (process.platform === 'win32' ? rel.toLowerCase() : rel);
+
+/**
+ * Where a staged file lives in the game: under the deploy root, or — for files
+ * staged under GAME_ROOT (a script extender, an ENB) — in the game folder itself.
+ */
+export function targetOf(root: string, gameRoot: string | undefined, rel: string): string {
+  if (gameRoot && rel.startsWith(`${GAME_ROOT}/`)) return path.join(gameRoot, rel.slice(GAME_ROOT.length + 1));
+  return path.join(root, rel);
+}
+
+/** The folder a target is counted from when Lattice notes which folders it created. */
+const baseOf = (root: string, gameRoot: string | undefined, rel: string) => (gameRoot && rel.startsWith(`${GAME_ROOT}/`) ? gameRoot : root);
 const fileCache = new Map<string, string[]>();
 
 export async function stagedFiles(dir: string): Promise<string[]> {
@@ -74,6 +89,8 @@ export async function computeOverlaps(order: string[], mods: Record<string, Inst
 
 export interface DeployOptions {
   root: string;
+  /** the game folder itself, when the deploy root is a folder inside it */
+  gameRoot?: string;
   order: string[];
   mods: Record<string, InstalledMod>;
   manifestPath: string;
@@ -131,7 +148,7 @@ export async function deploy(o: DeployOptions): Promise<DeployResult> {
       const w = want.get(k);
       if (w && w.staged === owned.staged) continue;
       try {
-        await fs.rm(path.join(o.root, owned.rel), { force: true });
+        await fs.rm(targetOf(o.root, o.gameRoot, owned.rel), { force: true });
       } catch (e) {
         failed.push(failure(owned.rel, e));
         continue;
@@ -139,14 +156,14 @@ export async function deploy(o: DeployOptions): Promise<DeployResult> {
       delete man.files[k];
       removed++;
       if (!w && man.backups.includes(k)) {
-        await restoreBackup(o.backupDir, o.root, owned.rel);
+        await restoreBackup(o.backupDir, targetOf(o.root, o.gameRoot, owned.rel), owned.rel);
         man.backups = man.backups.filter((b) => b !== k);
       }
     }
 
     // 2. Place wanted files.
     for (const [k, w] of want) {
-      const target = path.join(o.root, w.rel);
+      const target = targetOf(o.root, o.gameRoot, w.rel);
       const cur = man.files[k];
       if (cur && cur.staged === w.staged && (await exists(target))) {
         methods.add(cur.method);
@@ -168,7 +185,7 @@ export async function deploy(o: DeployOptions): Promise<DeployResult> {
         } else {
           await fs.rm(target, { force: true });
         }
-        await mkdirTracked(path.dirname(target), o.root, man);
+        await mkdirTracked(path.dirname(target), baseOf(o.root, o.gameRoot, w.rel), man);
         let method: 'hardlink' | 'copy' = o.method;
         if (method === 'hardlink') {
           try {
@@ -189,6 +206,7 @@ export async function deploy(o: DeployOptions): Promise<DeployResult> {
     await removeEmptyDirs(man);
   } finally {
     man.root = o.root;
+    man.gameRoot = o.gameRoot;
     man.deployedAt = new Date().toISOString();
     await fs.mkdir(path.dirname(o.manifestPath), { recursive: true });
     await fs.writeFile(o.manifestPath, JSON.stringify(man, null, 1));
@@ -217,7 +235,7 @@ export async function deployDrift(o: DeployOptions): Promise<{ missing: string[]
   const missing: string[] = [];
   const stale: string[] = [];
   for (const [k, owned] of Object.entries(man.files)) {
-    const here = await exists(path.join(o.root, owned.rel));
+    const here = await exists(targetOf(o.root, o.gameRoot, owned.rel));
     const w = want.get(k);
     if (w && w.staged === owned.staged) {
       if (!here) missing.push(owned.rel);
@@ -232,6 +250,12 @@ export async function ownedFiles(manifestPath: string, root: string): Promise<Se
   return new Set(Object.keys(man.files));
 }
 
+/** The same as absolute paths (lower case), wherever each file went. */
+export async function ownedPaths(manifestPath: string, root: string, gameRoot?: string): Promise<Set<string>> {
+  const man = await manifestFor(manifestPath, root);
+  return new Set(Object.values(man.files).map((f) => path.resolve(targetOf(root, gameRoot ?? man.gameRoot, f.rel)).toLowerCase()));
+}
+
 /** Takes every file we placed out of the game folder and restores the game's own files. */
 export async function purge(manifestPath: string, root: string, backupDir: string): Promise<{ removed: number; failed: DeployFailure[] }> {
   const man = await readManifest(manifestPath, root);
@@ -241,7 +265,7 @@ export async function purge(manifestPath: string, root: string, backupDir: strin
   let removed = 0;
   for (const [k, owned] of Object.entries(man.files)) {
     try {
-      await fs.rm(path.join(base, owned.rel), { force: true });
+      await fs.rm(targetOf(base, man.gameRoot, owned.rel), { force: true });
     } catch (e) {
       failed.push(failure(owned.rel, e));
       continue;
@@ -251,7 +275,8 @@ export async function purge(manifestPath: string, root: string, backupDir: strin
   }
   for (const k of [...man.backups]) {
     if (man.files[k]) continue; // our file is still there; restore once it is gone
-    await restoreBackup(backupDir, base, relOf.get(k) ?? k);
+    const rel = relOf.get(k) ?? k;
+    await restoreBackup(backupDir, targetOf(base, man.gameRoot, rel), rel);
     man.backups = man.backups.filter((b) => b !== k);
   }
   await removeEmptyDirs(man);
@@ -260,9 +285,8 @@ export async function purge(manifestPath: string, root: string, backupDir: strin
   return { removed, failed };
 }
 
-async function restoreBackup(backupDir: string, root: string, rel: string) {
+async function restoreBackup(backupDir: string, target: string, rel: string) {
   const bak = path.join(backupDir, rel);
-  const target = path.join(root, rel);
   try {
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.rename(bak, target);

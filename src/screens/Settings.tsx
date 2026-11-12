@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Download, FolderOpen, Moon, RefreshCw, ShieldCheck, Sun, Trash2, TriangleAlert, Upload } from 'lucide-react';
 import type { SourceId } from '../../shared/types';
 import { api, APP_VERSION, bridge } from '../api';
@@ -288,14 +288,32 @@ export function Settings() {
   useEffect(() => setMrUser(s?.modrinthUser ?? ''), [s?.modrinthUser]);
   useEffect(() => setHosts(s?.trustedHosts.join('\n') ?? ''), [s?.trustedHosts]);
   useEffect(() => setPname(profile?.name ?? ''), [profile?.id, profile?.name]);
+  // the list of sections on the left is read from the headings, so it never falls behind the page
+  const page = useRef<HTMLDivElement>(null);
+  const [sections, setSections] = useState<string[]>([]);
+  useEffect(() => {
+    const read = () => setSections([...(page.current?.querySelectorAll('section > h2') ?? [])].map((h) => h.textContent ?? ''));
+    read();
+    const timer = setTimeout(read, 400);
+    return () => clearTimeout(timer);
+  }, [game?.id, s?.language]);
   if (!s) return null;
   const set = (patch: Parameters<typeof api.updateSettings>[0]) => run(() => api.updateSettings(patch));
+  const jump = (i: number) => page.current?.querySelectorAll('section > h2')[i]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   return (
     <div className="content">
       <div className="screen">
-        <div className="screen-scroll">
-          <div className="settings">
+        <div className="screen-scroll settings-wrap">
+          <nav className="settings-nav" aria-label={t('Разделы настроек')}>
+            {sections.map((name, i) => (
+              <button key={`${name}${i}`} onClick={() => jump(i)}>
+                {name}
+              </button>
+            ))}
+            <button onClick={() => useUI.setState({ journalOpen: true, unreadErrors: 0 })}>{t('Журнал и отчёт о проблеме')}</button>
+          </nav>
+          <div className="settings" ref={page}>
             <section className="card card-pad section">
               <h2>{t('Вид')}</h2>
               <div className="field">
@@ -552,7 +570,7 @@ export function Settings() {
                 <div className="field">
                   <div className="grow">
                     {t('Убрать игру из Lattice')}
-                    <small>{t('Сначала очищает папку игры. Скачанные файлы остаются в кэше.')}</small>
+                    <small>{t('Сначала очищает папку игры от модов Lattice. Профили, снимки и коллекции этой игры удаляются; скачанное, что больше не нужно, тоже.')}</small>
                   </div>
                   <button className="btn sm danger" onClick={() => run(() => api.removeGame(game.id), t('Игра убрана'))}>
                     {t('Убрать игру')}

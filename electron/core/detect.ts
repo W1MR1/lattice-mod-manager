@@ -410,8 +410,21 @@ export async function detectAll(env: DetectEnv, officialExe?: string): Promise<D
   const found: DetectedGame[] = [];
   for (const c of await detectMinecraft(env, officialExe)) found.push({ ...c, defId: 'minecraft' });
   const cands = await storeCandidates(env);
+  // games from Thunderstore's list: Steam only, and only in the folder Steam gives that very game —
+  // an executable name alone is not proof among hundreds of games
+  const libs = await env.steamLibraries().catch(() => [] as string[]);
+  const common = await Promise.all(libs.map(async (lib) => ({ lib, names: new Set((await fs.readdir(path.join(lib, 'steamapps', 'common')).catch(() => [] as string[])).map((n) => n.toLowerCase())) })));
   for (const def of GAME_DEFS) {
-    if (def.kind === 'minecraft' || !def.exe?.length) continue;
+    if (!def.catalog || !def.steamFolder || !def.exe?.length) continue;
+    const first = def.steamFolder.split(/[\\/]/)[0].toLowerCase();
+    for (const { lib, names } of common) {
+      if (!names.has(first)) continue;
+      const dir = path.join(lib, 'steamapps', 'common', def.steamFolder);
+      if (await hasMarker(def, dir)) found.push({ defId: def.id, path: path.resolve(dir), via: 'steam', install: { store: 'steam' } });
+    }
+  }
+  for (const def of GAME_DEFS) {
+    if (def.kind === 'minecraft' || def.catalog || !def.exe?.length) continue;
     for (const c of cands) {
       if (found.some((f) => f.defId === def.id && samePath(f.path, c.dir))) continue;
       if (await hasMarker(def, c.dir)) found.push({ defId: def.id, path: path.resolve(c.dir), via: c.store, install: { store: c.store, epicId: c.epicId } });

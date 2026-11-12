@@ -13,6 +13,14 @@ import { ImportSheet } from '../sheets/ImportSheet';
 import { t } from '../../shared/i18n';
 
 type Filter = 'all' | 'issues' | 'off' | 'deps';
+type SortCol = 'order' | 'title' | 'version' | 'source' | 'status';
+
+/** How bad a mod's state is, for sorting by status: errors first. */
+function statusRank(m: InstalledMod, report: CompatReport | null): number {
+  if (!m.enabled) return 3;
+  const own = issuesFor(report, m.key);
+  return own.some((i) => i.severity === 'error') ? 0 : own.some((i) => i.severity === 'warning') ? 1 : 2;
+}
 
 export function issuesFor(report: CompatReport | null, key: string): Issue[] {
   return report?.issues.filter((i) => i.subject === key) ?? [];
@@ -25,6 +33,10 @@ export function ModStatus({ m, report }: { m: InstalledMod; report: CompatReport
   if (!worst) return <StatusChip tone="ok">{t('Совместим')}</StatusChip>;
   const word: Record<string, string> = {
     'missing-dep': t('Нет зависимости'),
+    'catalog-dep': t('Ссылка каталога'),
+    misplaced: t('Файлы не на месте'),
+    'needs-framework': t('Нет загрузчика'),
+    'not-loaded': t('Не загрузился'),
     'disabled-dep': t('Зависимость выкл.'),
     'version-mismatch': t('Не та версия'),
     conflict: t('Конфликт'),
@@ -47,6 +59,10 @@ export function ModStatus({ m, report }: { m: InstalledMod; report: CompatReport
 /** Runs a quick fix: some fixes apply at once, others open a plan. */
 export async function runFix(profileId: string, fix: Fix) {
   const ui = useUI.getState();
+  if (fix.kind === 'relayout') {
+    useUI.setState({ relayout: fix.key ?? null });
+    return;
+  }
   if (fix.kind === 'install' || fix.kind === 'update' || fix.kind === 'apply-collection') {
     await ui.openPlan(fix.label, () => api.applyFix(profileId, fix));
   } else {
@@ -66,6 +82,7 @@ export function Mods() {
   const run = useUI((s) => s.run);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [sort, setSort] = useState<{ col: SortCol; desc: boolean }>({ col: 'order', desc: false });
   const [collSheet, setCollSheet] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [removing, setRemoving] = useState<{ keys: string[]; all?: boolean } | null>(null);
@@ -80,8 +97,18 @@ export function Mods() {
     if (filter === 'issues') list = list.filter((m) => issuesFor(report, m.key).some((i) => i.severity !== 'info'));
     if (filter === 'off') list = list.filter((m) => !m.enabled);
     if (filter === 'deps') list = list.filter((m) => m.reason === 'dependency');
+    if (sort.col !== 'order') {
+      const by: Record<Exclude<SortCol, 'order'>, (a: InstalledMod, b: InstalledMod) => number> = {
+        title: (a, b) => a.title.localeCompare(b.title),
+        version: (a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }),
+        source: (a, b) => a.ref.source.localeCompare(b.ref.source) || a.title.localeCompare(b.title),
+        status: (a, b) => statusRank(a, report) - statusRank(b, report) || a.title.localeCompare(b.title),
+      };
+      list = [...list].sort(by[sort.col]);
+    }
+    if (sort.desc) list = [...list].reverse();
     return list;
-  }, [profile, report, q, filter]);
+  }, [profile, report, q, filter, sort]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -222,11 +249,17 @@ export function Mods() {
                   <th style={{ width: 44 }}>
                     <span className="sr-only">{t('Включён')}</span>
                   </th>
-                  <th>{t('Мод')}</th>
-                  <th>{t('Версия')}</th>
-                  <th>{t('Источник')}</th>
+                  {(
+                    [
+                      ['title', t('Мод')],
+                      ['version', t('Версия')],
+                      ['source', t('Источник')],
+                    ] as [SortCol, string][]
+                  ).map(([col, label]) => (
+                    <SortHead key={col} col={col} label={label} sort={sort} onSort={setSort} />
+                  ))}
                   <th>{t('Связи')}</th>
-                  <th>{t('Статус')}</th>
+                  <SortHead col="status" label={t('Статус')} sort={sort} onSort={setSort} />
                 </tr>
               </thead>
               <tbody>
@@ -267,6 +300,22 @@ export function Mods() {
       )}
       {collSheet && <CollectionSheet profileId={profile.id} onClose={() => setCollSheet(false)} />}
     </div>
+  );
+}
+
+/** A column head that sorts: a click sorts by it, another turns the order, a third goes back to load order. */
+function SortHead({ col, label, sort, onSort }: { col: SortCol; label: string; sort: { col: SortCol; desc: boolean }; onSort: (s: { col: SortCol; desc: boolean }) => void }) {
+  const on = sort.col === col;
+  return (
+    <th
+      className="sortable"
+      aria-sort={on ? (sort.desc ? 'descending' : 'ascending') : 'none'}
+      title={t('Сортировать; третий щелчок возвращает порядок загрузки')}
+      onClick={() => onSort(!on ? { col, desc: false } : !sort.desc ? { col, desc: true } : { col: 'order', desc: false })}
+    >
+      {label}
+      {on && <span className="sort-mark">{sort.desc ? '↓' : '↑'}</span>}
+    </th>
   );
 }
 
@@ -522,6 +571,22 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
           </div>
         </div>
 
+        {(m.installNotes?.length || m.extraVariants) && (
+          <div className="col">
+            <span className="label">{t('Как установлен')}</span>
+            {m.installNotes?.map((n) => (
+              <span key={n} className="muted" style={{ fontSize: 'var(--fs-sm)' }}>
+                {n}
+              </span>
+            ))}
+            {!!m.extraVariants && (
+              <span className="muted" style={{ fontSize: 'var(--fs-sm)' }}>
+                {t('В архиве есть ещё варианты ({0}) — кнопка «Варианты» внизу.', m.extraVariants)}
+              </span>
+            )}
+          </div>
+        )}
+
         <dl className="kv">
           <dt>{t('Версии игры')}</dt>
           <dd className="mono">{m.gameVersions.length ? m.gameVersions.slice(-6).join(', ') : t('не указаны')}</dd>
@@ -544,6 +609,11 @@ function ModInspector({ m, profile, report, onRemove }: { m: InstalledMod; profi
         <button className="btn" onClick={() => run(() => api.setEnabled(profile.id, m.key, !m.enabled))}>
           {m.enabled ? t('Выключить') : t('Включить')}
         </button>
+        {!m.choices && (m.extraVariants || m.layout) && (
+          <button className="btn" title={t('Выбрать другой вариант из архива или указать, куда положить файлы')} onClick={() => useUI.setState({ relayout: m.key })}>
+            <Puzzle size={14} /> {t('Варианты')}
+          </button>
+        )}
         {m.choices && (
           <button
             className="btn"

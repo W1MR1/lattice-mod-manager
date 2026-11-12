@@ -7,6 +7,8 @@ import type { LocalEntry } from './sources';
 
 export interface Persisted extends AppState {
   local: Record<string, LocalEntry>;
+  /** what sources said about projects mods point at (name, loaders), with the time it was asked */
+  catalog?: Record<string, { title?: string; loaders?: string[]; gameVersions?: string[]; at: number }>;
 }
 
 export const DEFAULT_TRUSTED_HOSTS = [

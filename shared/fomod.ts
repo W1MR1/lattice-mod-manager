@@ -43,6 +43,8 @@ export interface FomodStep {
 
 export interface FomodConfig {
   moduleName: string;
+  /** the installer's own picture (path inside the archive, relative to `root`) */
+  image?: string;
   /** archive folder that holds `fomod/` (sources are relative to it) */
   root: string;
   required: FomodFileRef[];
@@ -110,7 +112,8 @@ export function walkSteps(
     visible.push(step);
     out[step.name] = {};
     for (const g of step.groups) {
-      const chosen = choices[step.name]?.[g.name] ?? groupDefault(g, flags, fileState);
+      // "select all" is not a choice: every usable option of the group goes in
+      const chosen = g.type === 'SelectAll' ? groupDefault(g, flags, fileState) : (choices[step.name]?.[g.name] ?? groupDefault(g, flags, fileState));
       const valid = chosen.filter((n) => {
         const p = g.plugins.find((x) => x.name === n);
         return p && pluginType(p, flags, fileState) !== 'NotUsable';

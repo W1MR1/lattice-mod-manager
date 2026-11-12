@@ -5,15 +5,19 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { listArchive, sevenZip } from './core/archives';
+import { listArchive, listTree, sevenZip } from './core/archives';
+import { isBepInExPack } from './core/games';
 import type { LaunchTarget } from './core/launch';
 import { systemEnv } from './core/detect';
 import { Service } from './core/service';
 import { LANGS, langFromLcid, langFromLocale, type Lang } from '../shared/i18n';
+import { API_METHODS } from '../shared/api';
 import { t } from '../shared/i18n';
 
 const smoke = process.argv.includes('--smoke');
-if (smoke) app.setPath('userData', path.join(os.tmpdir(), `lattice-smoke-${Date.now()}`));
+const flag = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+// --home keeps the throwaway profile between runs (screenshots in several languages without downloading twice)
+if (smoke) app.setPath('userData', flag('home') ?? path.join(os.tmpdir(), `lattice-smoke-${Date.now()}`));
 const trace = (msg: string) => {
   if (smoke) void fs.appendFile(path.join(process.cwd(), 'smoke-trace.txt'), `${new Date().toISOString()} ${msg}\n`);
 };
@@ -22,19 +26,11 @@ trace(`start argv=${process.argv.join(' ')}`);
 let win: BrowserWindow | null = null;
 let service: Service;
 
-// Only these service methods are reachable from the renderer.
-const ALLOWED = new Set<keyof Service>([
-  'exportProfile', 'backupAll', 'restoreBackup', 'curseforgeAvailable', 'curseforgeCheck', 'modrinthAccount', 'modrinthList', 'scanImports', 'importPlan', 'setLauncherExe', 'diskUsage', 'freeUnused', 'discardPlan',
-  'state', 'gameDefs', 'detectGames', 'minecraftVersions', 'addGame', 'removeGame', 'setActiveGame',
-  'createProfile', 'updateProfile', 'deleteProfile', 'switchProfile', 'compat', 'search', 'project', 'versions',
-  'planInstall', 'planUpdates', 'planCollection', 'applyFix', 'applyPlan', 'setEnabled', 'dependentsOf', 'removeMod',
-  'addRule', 'removeRule', 'setUserLink', 'importLocal', 'createCollection', 'updateCollection', 'relockCollection',
-  'deleteCollection', 'exportCollection', 'importCollectionFile', 'importModpack', 'createProfileForCollection',
-  'removeCollectionFromProfile', 'deploy', 'purge', 'snapshot', 'rollback', 'deleteSnapshot', 'updateSettings',
-  'inspectPlan', 'fomodPrompt', 'reinstallWithChoices', 'pluginOrder', 'setNexusKey', 'clearNexusKey', 'handleNxm',
-  'nexusSsoAvailable', 'loginWithNexus',
-  'previewRemoval', 'removeMods', 'removeAllMods', 'deleteLeftovers', 'launchGame', 'setGamePath', 'healthCheck', 'repair',
-]);
+// Only the methods of shared/api.ts are reachable from the renderer.
+const ALLOWED = new Set<string>(API_METHODS);
+// every name in that list must be a method of the service: checked when this file is compiled
+const _methods: readonly (keyof Service)[] = API_METHODS;
+void _methods;
 
 const OVERLAY = {
   dark: { color: '#0e0f10', symbolColor: '#a9a6a0', height: 40 },
@@ -52,9 +48,19 @@ function fromOurWindow(e: Electron.IpcMainInvokeEvent) {
 function registerIpc() {
   ipcMain.handle('lattice:call', async (e, method: string, args: unknown[]) => {
     if (!fromOurWindow(e)) throw new Error('forbidden');
-    if (!ALLOWED.has(method as keyof Service)) throw new Error(t('Неизвестный метод {0}', method));
+    if (!ALLOWED.has(method)) throw new Error(t('Неизвестный метод {0}', method));
     const fn = (service as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
-    return fn.apply(service, Array.isArray(args) ? args : []);
+    const began = Date.now();
+    try {
+      return await fn.apply(service, Array.isArray(args) ? args : []);
+    } catch (e) {
+      // what failed stays in the journal, so the user can send it on
+      service.note('err', `${method}: ${(e as Error).message}`);
+      throw e;
+    } finally {
+      // a smoke run keeps the time of every call: a slow screen shows up in the trace
+      if (smoke && Date.now() - began > 200) trace(`slow call ${method}: ${Date.now() - began} ms`);
+    }
   });
 
   ipcMain.handle('lattice:downloads', (e, action: 'list' | 'pause' | 'resume' | 'cancel' | 'clear', id?: string) => {
@@ -67,7 +73,7 @@ function registerIpc() {
     return d.list();
   });
 
-  ipcMain.handle('lattice:dialog', async (e, kind: 'folder' | 'files' | 'collection-open' | 'collection-save' | 'backup-open' | 'backup-save' | 'exe', defaultName?: string) => {
+  ipcMain.handle('lattice:dialog', async (e, kind: 'folder' | 'files' | 'collection-open' | 'collection-save' | 'backup-open' | 'backup-save' | 'exe' | 'report-save', defaultName?: string) => {
     if (!fromOurWindow(e) || !win) throw new Error('forbidden');
     if (kind === 'exe') {
       const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: t('Программы'), extensions: ['exe'] }] });
@@ -91,6 +97,10 @@ function registerIpc() {
     if (kind === 'backup-open') {
       const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: t('Резервная копия Lattice'), extensions: ['json'] }] });
       return r.canceled ? null : r.filePaths[0];
+    }
+    if (kind === 'report-save') {
+      const r = await dialog.showSaveDialog(win, { defaultPath: defaultName ?? 'lattice-report.txt', filters: [{ name: t('Текст'), extensions: ['txt'] }] });
+      return r.canceled ? null : r.filePath;
     }
     const backup = kind === 'backup-save';
     const r = await dialog.showSaveDialog(win, { defaultPath: defaultName, filters: [{ name: backup ? t('Резервная копия Lattice') : t('Коллекция Lattice'), extensions: ['json'] }] });
@@ -172,12 +182,20 @@ async function createWindow() {
 /** Renders each screen offscreen, saves screenshots and exits. Uses a throwaway profile. */
 async function runSmoke() {
   if (!win) return;
-  const outDir = path.join(process.cwd(), 'smoke');
+  const outDir = path.resolve(flag('out') ?? 'smoke');
   await fs.mkdir(outDir, { recursive: true });
   const log: string[] = [];
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   trace('smoke: seeding');
-  try {
+  const pack = flag('showcase');
+  let show: Awaited<ReturnType<typeof seedShowcase>> | null = null;
+  if (pack) {
+    try {
+      show = await seedShowcase(pack, log);
+    } catch (e) {
+      log.push(`showcase failed: ${(e as Error).stack}`);
+    }
+  } else try {
     const inst = path.join(app.getPath('userData'), 'minecraft-instance');
     await fs.mkdir(inst, { recursive: true });
     // an official launcher folder, as Lattice finds it when the game is added
@@ -295,17 +313,55 @@ async function runSmoke() {
       log.push(`thunderstore failed: ${(e as Error).stack}`);
     }
   }
+  // --ts-games=repo,peak: games from Thunderstore's list, end to end — the most downloaded mod of each
+  // is planned, downloaded and laid out, and the loader must land where the game starts it
+  for (const id of (flag('ts-games') ?? '').split(',').filter(Boolean)) {
+    trace(`smoke: thunderstore game ${id}`);
+    try {
+      const def = service.gameDefs().find((d) => d.id === id);
+      if (!def) throw new Error(`no such game: ${id}`);
+      const dir = path.join(app.getPath('userData'), 'ts', id);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, def.exe![0]), '');
+      const g = await service.addGame(id, dir);
+      const p = service.state().profiles.find((x) => x.id === g.activeProfileId)!;
+      const hits = (await service.search({ source: 'thunderstore', text: '', ctx: p.context, limit: 12 })).hits;
+      const pick = hits.find((h) => !isBepInExPack(h.ref.projectId) && h.kind !== 'modpack');
+      if (!pick) throw new Error(`nothing to install among ${hits.length} hits`);
+      const plan = await service.planInstall(g.activeProfileId, [{ ref: pick.ref, title: pick.title }]);
+      await service.applyPlan(plan.id, true);
+      const files = await listTree(dir);
+      const report = await service.compat(g.activeProfileId);
+      log.push(
+        `${def.name}: «${pick.title}» plan ok=${plan.ok} installs=${plan.install.map((i) => i.version.ref.projectId).join(', ')} | files=${files.length} loader=${files.some((f) => /^winhttp\.dll$/i.test(f))} core=${files.some((f) => /^BepInEx\/core\/BepInEx[^/]*\.dll$/i.test(f))} plugins=${files.filter((f) => /^BepInEx\/plugins\/.+\.dll$/i.test(f)).length} | score=${report.score} errors=${report.errors}`,
+      );
+      for (const i of [...plan.issues, ...report.issues].filter((x) => x.severity !== 'info')) log.push(`    [${i.severity}] ${i.code}: ${i.message}`);
+    } catch (e) {
+      log.push(`thunderstore game ${id} failed: ${(e as Error).stack}`);
+    }
+  }
   if (process.argv.includes('--light')) service.updateSettings({ theme: 'light' });
   send('state', service.state());
-  const routes = (process.argv.find((a) => a.startsWith('--routes='))?.slice(9) ?? 'mods,discover,graph,collections,downloads,snapshots,settings').split(',');
+  const routes = (flag('routes') ?? 'home,mods,discover,graph,collections,downloads,snapshots,settings').split(',');
   win.setSize(1400, 880);
+  const js = (code: string) => win!.webContents.executeJavaScript(code);
+  // a hidden window hands out the frame it drew last: the first capture makes it draw, the second one is the picture
+  const shot = async (name: string) => {
+    await win!.webContents.capturePage();
+    await wait(150);
+    await fs.writeFile(path.join(outDir, `${name}.png`), (await win!.webContents.capturePage()).toPNG());
+  };
+  if (show) {
+    // pictures for the README: no notifications over them, and the window has caught up with the seeding
+    await win.webContents.insertCSS('.toasts { display: none !important; }');
+    await wait(2500);
+  }
   trace(`smoke: seeded, ${log.length} log lines`);
   for (const r of routes) {
     trace(`smoke: capture ${r}`);
     await win.webContents.executeJavaScript(`location.hash = '#/${r}'`);
     await wait(r === 'discover' ? 4000 : 1500);
-    const img = await win.webContents.capturePage();
-    await fs.writeFile(path.join(outDir, `${r}.png`), img.toPNG());
+    await shot(r);
     // the graph from far away: names give way to the overview
     if (r === 'graph') {
       for (const [part, presses] of [['far', 4], ['farther', 9]] as const) {
@@ -313,7 +369,7 @@ async function runSmoke() {
           `(() => { const el = document.querySelector('.graph-wrap'); el.focus(); for (let i = 0; i < ${presses}; i++) el.dispatchEvent(new KeyboardEvent('keydown', { key: '-', bubbles: true })); })()`,
         );
         await wait(600);
-        await fs.writeFile(path.join(outDir, `${r}-${part}.png`), (await win.webContents.capturePage()).toPNG());
+        await shot(`${r}-${part}`);
       }
     }
     // long screens: also the middle and the end
@@ -323,13 +379,119 @@ async function runSmoke() {
           `document.querySelectorAll('*').forEach((e) => { if (e.scrollHeight > e.clientHeight + 40 && getComputedStyle(e).overflowY !== 'visible') e.scrollTop = (e.scrollHeight - e.clientHeight) * ${at}; })`,
         );
         await wait(600);
-        await fs.writeFile(path.join(outDir, `${r}-${part}.png`), (await win.webContents.capturePage()).toPNG());
+        await shot(`${r}-${part}`);
       }
+    }
+  }
+  if (show) {
+    trace('smoke: showcase captures');
+    try {
+      // a library many mods stand on, picked on the graph
+      await js(`location.hash = '#/graph'`);
+      await wait(1200);
+      await js(`document.querySelector('g.graph-node[aria-label^="Cloth Config"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+      await wait(700);
+      await shot('graph-picked');
+      // the command palette and the journal, over the Minecraft pack
+      await js(`location.hash = '#/mods'`);
+      await wait(800);
+      await js(`document.querySelector('.palette-open').click()`);
+      await wait(600);
+      await shot('palette');
+      await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))`);
+      await js(`document.querySelector('.statusbar-btn').click()`);
+      await wait(800);
+      await shot('journal');
+      await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+      // the list of games, searched
+      await js(`document.querySelector('.rail > .rail-btn:not(.solid)').click()`);
+      await wait(2500);
+      await js(`(() => { const el = document.querySelector('.modal .search input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 'su'); el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      await wait(700);
+      await shot('add-game');
+      await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+      // Cyberpunk: what the content checks say, then an archive that offers variants
+      service.setActiveGame(show.cp.id);
+      send('state', service.state());
+      for (const r of ['home', 'mods']) {
+        await js(`location.hash = '#/${r}'`);
+        await wait(1800);
+        await shot(`cyberpunk-${r}`);
+      }
+      const plan = await service.importLocal(show.cp.activeProfileId, [show.variants]);
+      send('plan', plan);
+      await wait(900);
+      await js(`document.querySelector('.modal .modal-foot .btn.primary').click()`);
+      await wait(3000);
+      await shot('variants');
+    } catch (e) {
+      log.push(`showcase captures failed: ${(e as Error).stack}`);
     }
   }
   await fs.writeFile(path.join(outDir, 'log.txt'), log.join('\n'));
   await service.store.flush();
   app.exit(0);
+}
+
+/**
+ * A library worth a screenshot: a real Minecraft pack and a Cyberpunk folder
+ * with mods packed the ways people pack them. Seeds once per --home folder.
+ */
+async function seedShowcase(pack: string, log: string[]) {
+  const root = app.getPath('userData');
+  const zip = async (name: string, files: Record<string, string>) => {
+    const dir = path.join(root, 'showcase-src', name);
+    for (const [rel, body] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+      await fs.writeFile(path.join(dir, rel), body);
+    }
+    const out = path.join(root, 'showcase-src', `${name}.zip`);
+    await fs.rm(out, { force: true });
+    await new Promise<void>((res, rej) => execFile(sevenZip(), ['a', '-tzip', out, '*'], { cwd: dir, windowsHide: true }, (e) => (e ? rej(e) : res())));
+    return out;
+  };
+  const variants = await zip('Rain Overhaul 1.4', {
+    'Option A - Light Rain/archive/pc/mod/rain_light.archive': 'a',
+    'Option B - Heavy Rain/archive/pc/mod/rain_heavy.archive': 'b',
+    'Option C - Storms/archive/pc/mod/rain_storm.archive': 'c',
+    'readme.txt': 'Pick one.',
+  });
+  let mc = service.state().games.find((g) => g.defId === 'minecraft');
+  let cp = service.state().games.find((g) => g.defId === 'cyberpunk2077');
+  if (!mc) {
+    const inst = path.join(root, 'minecraft-instance');
+    await fs.mkdir(inst, { recursive: true });
+    await fs.writeFile(path.join(inst, 'launcher_profiles.json'), JSON.stringify({ profiles: {}, settings: {} }));
+    mc = await service.addGame('minecraft', inst, { gameVersion: '1.20.1', loader: 'fabric' });
+    const c = await service.importCollectionFile(pack);
+    const plan = await service.planCollection(mc.activeProfileId, c.id);
+    log.push(`showcase pack: ${c.name}, ${c.mods.length} mods, plan ok=${plan.ok}`);
+    await service.applyPlan(plan.id, true);
+  }
+  if (!cp) {
+    const dir = path.join(root, 'Cyberpunk 2077');
+    await fs.mkdir(path.join(dir, 'bin', 'x64'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'bin', 'x64', 'Cyberpunk2077.exe'), '');
+    cp = await service.addGame('cyberpunk2077', dir);
+    const plan = await service.importLocal(cp.activeProfileId, [
+      // loose files: the game reads them only from archive/pc/mod
+      await zip('Night City Lights 1.2', { 'lights_main.archive': 'x', 'lights_dlc.archive': 'x' }),
+      // a script mod for a framework that is not installed
+      await zip('Quick Hack HUD 0.9', { 'bin/x64/plugins/cyber_engine_tweaks/mods/QuickHackHUD/init.lua': '-- hud' }),
+      // a wrapper folder, two levels deep
+      await zip('Street Wear Pack 2.0', {
+        'Street Wear Pack 2.0/Main/archive/pc/mod/streetwear.archive': 'x',
+        'Street Wear Pack 2.0/Main/archive/pc/mod/streetwear.xl': 'x',
+      }),
+    ]);
+    await service.applyPlan(plan.id, true);
+  }
+  const report = await service.compat(mc.activeProfileId);
+  log.push(`showcase: minecraft score=${report.score} errors=${report.errors} warnings=${report.warnings}`);
+  // the same library is photographed in several languages: the default profile name follows the language
+  for (const p of service.state().profiles) service.updateProfile(p.id, { name: t('Основной') });
+  service.setActiveGame(mc.id);
+  return { mc, cp, variants };
 }
 
 // ---------- nxm:// links ("Mod Manager Download" on nexusmods.com)
@@ -481,6 +643,7 @@ app.whenReady().then(async () => {
   service.on('toast', (toast) => send('toast', toast));
   service.on('deployed', (d) => send('deployed', d));
   service.on('plan', (p) => send('plan', p));
+  service.on('nexus', (n) => send('nexus', n));
   service.downloads.on('update', (list) => send('downloads', list));
   syncNxmProtocol(service.settings.handleNxm);
   const smokeLang = process.argv.find((a) => a.startsWith('--lang='))?.slice(7) as Lang | undefined;

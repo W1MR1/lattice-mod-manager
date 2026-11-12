@@ -14,6 +14,12 @@ const H = 38;
 const GAP_X = 300;
 const GAP_Y = 52;
 const PAD = 28;
+/** lanes of one layer stand closer than layers: no link runs between them */
+const LANE_X = W + 26;
+/** a layer taller than this wraps into lanes */
+const WRAP_FROM = 14;
+/** width to height the wrapped graph aims at: about the frame it is shown in */
+const SHAPE = 1.6;
 
 interface GNode {
   key: string;
@@ -22,6 +28,8 @@ interface GNode {
   ghost: boolean;
   enabled: boolean;
   tone: 'ok' | 'warn' | 'err' | 'muted';
+  /** why the node has its mark, in a sentence (the worst problem, or what the mark means) */
+  reason: string;
   x: number;
   y: number;
 }
@@ -51,7 +59,7 @@ function layout(profile: Profile, report: CompatReport | null, skip: Set<string>
       }
       if (target) edges.push({ from: target, to: m.key, kind: d.kind === 'requires' ? 'req' : 'rec' });
       else if (d.kind === 'requires') {
-        ghosts.set(k, d.name ?? d.ref.projectId);
+        ghosts.set(k, d.name ?? report?.names?.[k] ?? d.ref.projectId);
         edges.push({ from: k, to: m.key, kind: 'req' });
       }
     }
@@ -92,29 +100,70 @@ function layout(profile: Profile, report: CompatReport | null, skip: Set<string>
   }
 
   const issueTone = new Map<string, GNode['tone']>();
+  const issueText = new Map<string, string>();
+  // a dependency that is not installed is as bad as the worst problem that names it
+  const ghostTone = new Map<string, GNode['tone']>();
   for (const i of report?.issues ?? []) {
+    const tone = i.severity === 'error' ? 'err' : i.severity === 'warning' ? 'warn' : 'muted';
+    for (const r of i.related) if (ghosts.has(r) && (ghostTone.get(r) ?? 'muted') !== 'err' && tone !== 'muted') ghostTone.set(r, tone);
     if (i.severity === 'info') continue;
-    const t = i.severity === 'error' ? 'err' : 'warn';
-    if (issueTone.get(i.subject) !== 'err') issueTone.set(i.subject, t);
+    if (issueTone.get(i.subject) !== 'err') {
+      issueTone.set(i.subject, tone);
+      issueText.set(i.subject, i.message);
+    }
   }
+  // A layer of sixty mods in one column makes a strip no window can show.
+  // Long layers wrap into lanes; the lane height is the one that brings the
+  // whole graph closest to the shape of the window.
+  const sizes = columns.map((c) => c?.length ?? 0);
+  const tallest = Math.max(1, ...sizes);
+  const lanesAt = (rows: number) => sizes.map((n) => Math.max(1, Math.ceil(n / rows)));
+  // lanes of a layer are filled evenly, so the graph is as tall as its fullest lane
+  const rowsOf = (lanes: number[]) => Math.max(1, ...sizes.map((n, c) => Math.ceil(n / lanes[c])));
+  const widthAt = (lanes: number[]) => PAD * 2 + lanes.reduce((a, n) => a + (n - 1) * LANE_X, 0) + Math.max(0, lanes.length - 1) * GAP_X + W;
+  let rows = tallest;
+  if (tallest > WRAP_FROM) {
+    let best = Infinity;
+    for (let r = 10; r <= tallest; r++) {
+      const off = Math.abs(Math.log(widthAt(lanesAt(r)) / (PAD * 2 + rowsOf(lanesAt(r)) * GAP_Y) / SHAPE));
+      if (off < best) {
+        best = off;
+        rows = r;
+      }
+    }
+  }
+  const lanes = lanesAt(rows);
   const nodes: GNode[] = [];
-  columns.forEach((col, c) =>
+  let left = PAD;
+  columns.forEach((col, c) => {
+    // even lanes rather than a full one and a stub
+    const per = Math.ceil((col?.length ?? 0) / lanes[c]) || 1;
+    const x0 = left;
+    left += (lanes[c] - 1) * LANE_X + GAP_X;
     col?.forEach((k, i) => {
       const m = profile.mods[k];
+      const tone: GNode['tone'] = !m ? (ghostTone.get(k) ?? 'muted') : !m.enabled ? 'muted' : (issueTone.get(k) ?? 'ok');
       nodes.push({
         key: k,
         title: titleOf(k),
-        version: m?.version ?? t('не установлен'),
+        version: m?.version ?? (tone === 'muted' ? t('не установлен, для запуска не нужен') : t('не установлен')),
         ghost: !m,
         enabled: m?.enabled ?? false,
-        tone: !m ? 'err' : !m.enabled ? 'muted' : (issueTone.get(k) ?? 'ok'),
-        x: PAD + c * GAP_X,
-        y: PAD + i * GAP_Y,
+        tone,
+        reason: !m
+          ? tone === 'muted'
+            ? t('На него ссылается каталог, но для запуска он не нужен.')
+            : t('Не установлен, а другой мод без него не заработает.')
+          : !m.enabled
+            ? t('Выключен: его файлов нет в игре.')
+            : (issueText.get(k) ?? t('Включён, проблем не найдено.')),
+        x: x0 + Math.floor(i / per) * LANE_X,
+        y: PAD + (i % per) * GAP_Y,
       });
-    }),
-  );
-  const width = PAD * 2 + Math.max(0, columns.length - 1) * GAP_X + W;
-  const height = PAD * 2 + Math.max(1, ...columns.map((c) => c?.length ?? 0)) * GAP_Y;
+    });
+  });
+  const width = widthAt(lanes);
+  const height = PAD * 2 + rowsOf(lanes) * GAP_Y;
   return { nodes, edges, width, height };
 }
 
@@ -179,7 +228,7 @@ const Scene = memo(
           .map((n) => (
             <g
               key={n.key}
-              className={`graph-node ${n.ghost ? 'ghost' : ''} ${!n.enabled && !n.ghost ? 'off' : ''} ${picked === n.key ? 'sel' : ''} ${focus && !near.has(n.key) ? 'graph-dim' : ''}`}
+              className={`graph-node ${n.ghost ? `ghost tone-${n.tone}` : ''} ${!n.enabled && !n.ghost ? 'off' : ''} ${picked === n.key ? 'sel' : ''} ${focus && !near.has(n.key) ? 'graph-dim' : ''}`}
               transform={`translate(${n.x} ${n.y})`}
               onMouseEnter={() => onHover(n.key)}
               onMouseLeave={() => onHover(null)}
@@ -189,8 +238,9 @@ const Scene = memo(
               }}
               onDoubleClick={() => !n.ghost && onOpen(n.key)}
               role="button"
-              aria-label={`${n.title}, ${n.version}`}
+              aria-label={`${n.title}, ${n.version}. ${n.reason}`}
             >
+              <title>{`${n.title}\n${n.reason}`}</title>
               <rect width={W} height={H} rx={8} />
               <circle cx={16} cy={H / 2} r={7} fill={TONE_VAR[n.tone]} />
               <text x={16} y={H / 2 + 0.5} textAnchor="middle" dominantBaseline="central" style={{ fill: 'var(--bg-1)', fontSize: 10, fontWeight: 800 }}>
@@ -358,6 +408,12 @@ export function Graph() {
               <i className="conflict" /> {t('конфликтует')}
             </span>
             <span>{t('Пунктирная рамка — зависимость не установлена')}</span>
+            <span className="legend-marks" title={t('Значок слева от названия мода')}>
+              <b className="mark ok">✓</b> {t('в порядке')}
+              <b className="mark warn">!</b> {t('есть замечание')}
+              <b className="mark err">×</b> {t('ошибка: может не работать')}
+              <b className="mark muted">–</b> {t('выключен или не нужен')}
+            </span>
           </div>
           <span className="grow" />
           <div className="search" style={{ width: 220 }}>
@@ -471,12 +527,17 @@ export function Graph() {
           <div className="card card-pad col">
             <b>{pickedNode.title}</b>
             <span className="mono muted">{pickedNode.version}</span>
+            <span className="row" style={{ gap: 6, alignItems: 'flex-start', fontSize: 'var(--fs-sm)' }}>
+              <b className={`mark ${pickedNode.tone}`} aria-hidden>
+                {GLYPH[pickedNode.tone]}
+              </b>
+              <span style={{ userSelect: 'text' }}>{pickedNode.reason}</span>
+            </span>
             {why && why.length > 1 && (
               <span className="muted" style={{ fontSize: 'var(--fs-sm)' }}>
                 {t('Здесь потому, что нужен: {0}', why.slice(1).map((k) => profile.mods[k]?.title ?? k).join(' → '))}
               </span>
             )}
-            {pickedIssues.length === 0 && <span className="faint">{t('Проблем нет.')}</span>}
             {!pickedNode.ghost && (
               <button
                 className="btn sm"

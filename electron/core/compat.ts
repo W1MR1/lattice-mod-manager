@@ -2,11 +2,19 @@
 // collections is verified against what is actually installed and enabled.
 import type { Collection, CompatReport, InstalledMod, Issue, Profile } from '../../shared/types';
 import { keyOf } from '../../shared/types';
-import { gameVersionFits, loaderFits } from '../../shared/context';
+import { gameVersionFits, loaderFits, loaderLabel } from '../../shared/context';
 import { matchesStrict, satisfies, violatesStrict } from '../../shared/versions';
 import { computeOrder, providerIndex } from './loadorder';
-import { BUILTIN_IDS, type JarMeta } from './jarmeta';
+import { builtinIds, jarView, type JarMeta } from './jarmeta';
 import { t } from '../../shared/i18n';
+
+/** What is known about a project mods point at but the profile does not have. */
+export interface DepInfo {
+  title?: string;
+  /** loaders the project is released for, when its source says */
+  loaders?: string[];
+  gameVersions?: string[];
+}
 
 export interface FileOverlap {
   path: string;
@@ -33,6 +41,8 @@ export function checkCompatibility(
   pluginCheck?: PluginCheck,
   /** what each Minecraft mod's jars declare (key -> merged metadata) */
   jars?: Map<string, JarMeta>,
+  /** names and loaders of projects that are referenced but not installed */
+  known?: Map<string, DepInfo>,
 ): CompatReport {
   const all = Object.values(profile.mods);
   const enabled = all.filter((m) => m.enabled);
@@ -46,8 +56,12 @@ export function checkCompatibility(
     seen.add(id);
     issues.push({ ...i, id });
   };
-  const title = (key: string, fallback?: string) => profile.mods[key]?.title ?? fallback ?? key.split(':').slice(1).join(':');
+  const title = (key: string, fallback?: string) => profile.mods[key]?.title ?? fallback ?? known?.get(key)?.title ?? key.split(':').slice(1).join(':');
   const ctx = profile.context;
+  const loaderName = loaderLabel(ctx.loader);
+  // what the mod's own file says to the loader the profile runs: for Minecraft the loader
+  // decides by it alone whether the game starts, whatever a catalogue lists
+  const view = (key: string) => (jars ? jarView(jars.get(key), ctx.loader) : undefined);
 
   const dependents: Record<string, string[]> = {};
   for (const m of all) dependents[m.key] = [];
@@ -78,6 +92,9 @@ export function checkCompatibility(
       const depKey = keyOf(d.ref);
       const depName = d.name ?? title(depKey);
       const live = (enabledProviders.get(depKey) ?? []).filter((p) => p.key !== m.key);
+      const info = known?.get(depKey);
+      // the project is not released for this loader at all: it cannot be what the mod needs here
+      const otherLoader = !!ctx.loader && !!info?.loaders?.length && !loaderFits(info.loaders, ctx.loader);
 
       if (d.kind === 'requires') {
         for (const p of live) (dependents[p.key] ??= []).push(m.key);
@@ -91,6 +108,25 @@ export function checkCompatibility(
               related: [off[0].key],
               message: t('«{0}» требует «{1}», но он выключен.', m.title, off[0].title),
               fix: { kind: 'enable', label: t('Включить «{0}»', off[0].title), key: off[0].key },
+            });
+          } else if (otherLoader) {
+            push({
+              severity: 'info',
+              code: 'catalog-dep',
+              subject: m.key,
+              related: [depKey],
+              message: t('«{0}» в каталоге ссылается на «{1}», но его нет для {2}: так бывает, когда один файл мода собран для нескольких загрузчиков или в сборке стоит порт. Для запуска он не нужен.', m.title, depName, loaderName),
+            });
+          } else if (!d.user && view(m.key)?.known) {
+            // the mod file itself does not ask for it (or the profile has it under another name): the game starts
+            const can = !!info?.loaders?.length;
+            push({
+              severity: can ? 'warning' : 'info',
+              code: 'catalog-dep',
+              subject: m.key,
+              related: [depKey],
+              message: t('Каталог считает «{1}» обязательным для «{0}», а сам файл мода его не требует: игра запустится. Если «{0}» не заработает, поставьте «{1}».', m.title, depName),
+              fix: { kind: 'install', label: t('Установить «{0}»', depName), ref: d.ref, versionId: d.versionId },
             });
           } else {
             push({
@@ -188,7 +224,7 @@ export function checkCompatibility(
       code: 'cycle',
       subject: cyc[0],
       related: cyc.slice(1),
-      message: t('Циклический порядок загрузки: {0}.', cyc.map((k) => `«${title(k)}»`).join(' → ')),
+      message: t('Правила порядка противоречат друг другу: {0}. Уберите одно из правил в карточке мода.', cyc.map((k) => `«${title(k)}»`).join(' → ')),
     });
   }
 
@@ -256,14 +292,28 @@ export function checkCompatibility(
   }
 
   // Dependencies written in the jars themselves: the loader stops the game when one is missing.
+  // Each jar answers for the loader of the profile only: what it asks Quilt or Forge for
+  // does not matter on Fabric.
   if (jars?.size) {
-    const live = [...jars].filter(([k]) => profile.mods[k]?.enabled);
-    const provided = new Set<string>(BUILTIN_IDS);
-    for (const [, m] of live) for (const id of m.ids) provided.add(id.toLowerCase());
-    for (const [k, m] of live) {
-      // the game version and loader the mod file itself asks for (works for any source, local files too)
-      const mc = m.depends.find((d) => d.id.toLowerCase() === 'minecraft');
+    const live = [...jars].filter(([k]) => profile.mods[k]?.enabled).map(([k, m]) => ({ k, m, v: jarView(m, ctx.loader) }));
+    const provided = builtinIds(ctx.loader);
+    for (const x of live) for (const id of x.v.ids) provided.add(id.toLowerCase());
+    for (const { k, m, v } of live) {
       const fixable = profile.mods[k].ref.source !== 'local';
+      if (ctx.loader && m.loaders?.length && !loaderFits(m.loaders, ctx.loader)) {
+        push({
+          severity: 'error',
+          code: 'incompatible-loader',
+          subject: k,
+          related: [],
+          message: t('«{0}» сделан для {1}, а профиль использует {2}: так указано в самом файле мода.', title(k), m.loaders.join(' / '), ctx.loader),
+          fix: fixable ? { kind: 'update', label: t('Подобрать версию под загрузчик'), key: k } : undefined,
+        });
+        continue; // the loader will not read this jar: what it asks for is beside the point
+      }
+      if (!v.known) continue;
+      // the game version the mod file itself asks for (works for any source, local files too)
+      const mc = v.depends.find((d) => d.id.toLowerCase() === 'minecraft');
       if (mc && violatesStrict(ctx.gameVersion, mc.range)) {
         push({
           severity: 'error',
@@ -274,18 +324,8 @@ export function checkCompatibility(
           fix: fixable ? { kind: 'update', label: t('Подобрать совместимую версию'), key: k } : undefined,
         });
       }
-      if (ctx.loader && m.loaders?.length && !loaderFits(m.loaders, ctx.loader)) {
-        push({
-          severity: 'error',
-          code: 'incompatible-loader',
-          subject: k,
-          related: [],
-          message: t('«{0}» сделан для {1}, а профиль использует {2}: так указано в самом файле мода.', title(k), m.loaders.join(' / '), ctx.loader),
-          fix: fixable ? { kind: 'update', label: t('Подобрать версию под загрузчик'), key: k } : undefined,
-        });
-      }
-      const own = new Set(m.ids.map((x) => x.toLowerCase()));
-      for (const d of m.depends) {
+      const own = new Set(v.ids.map((x) => x.toLowerCase()));
+      for (const d of v.depends) {
         const id = d.id.toLowerCase();
         if (provided.has(id) || own.has(id)) continue;
         push({
@@ -297,18 +337,18 @@ export function checkCompatibility(
           fix: profile.mods[k].ref.source === 'modrinth' ? { kind: 'install', label: t('Найти «{0}» на Modrinth и установить', d.id), ref: { source: 'modrinth', projectId: id.replace(/_/g, '-') } } : undefined,
         });
       }
-      for (const b of m.breaks) {
+      for (const b of v.breaks) {
         const id = b.id.toLowerCase();
-        const other = live.find(([k2, m2]) => k2 !== k && m2.ids.some((x) => x.toLowerCase() === id));
+        const other = live.find((o) => o.k !== k && o.v.ids.some((x) => x.toLowerCase() === id));
         // a breaks entry usually names old versions only: it counts when the installed one is in the range
-        if (!other || !matchesStrict(other[1].versions[id], b.range)) continue;
+        if (!other || !matchesStrict(other.v.versions[id], b.range)) continue;
         push({
           severity: 'error',
           code: 'jar-breaks',
           subject: k,
-          related: [other[0]],
-          message: t('«{0}» не работает вместе с «{1}»: это указано в самом файле мода.', title(k), title(other[0])),
-          fix: { kind: 'disable', label: t('Выключить «{0}»', title(other[0])), key: other[0] },
+          related: [other.k],
+          message: t('«{0}» не работает вместе с «{1}»: это указано в самом файле мода.', title(k), title(other.k)),
+          fix: { kind: 'disable', label: t('Выключить «{0}»', title(other.k)), key: other.k },
         });
       }
     }
@@ -316,9 +356,33 @@ export function checkCompatibility(
 
   const errors = issues.filter((i) => i.severity === 'error').length;
   const warnings = issues.filter((i) => i.severity === 'warning').length;
-  const score = enabled.length === 0 ? 100 : Math.max(0, Math.min(100, 100 - errors * 18 - warnings * 5));
+  const score = scoreOf(enabled.length, errors, warnings);
   issues.sort((a, b) => sevRank(a.severity) - sevRank(b.severity));
-  return { score, errors, warnings, issues, order, dependents };
+  const names: Record<string, string> = {};
+  for (const [k, v] of known ?? []) if (v.title) names[k] = v.title;
+  return { score, errors, warnings, issues, order, dependents, names };
+}
+
+/** How a profile scores for a number of errors and warnings. */
+function scoreOf(enabled: number, errors: number, warnings: number): number {
+  return enabled === 0 ? 100 : Math.max(0, Math.min(100, 100 - errors * 18 - warnings * 5));
+}
+
+/** Adds problems found elsewhere (in the mods' files, in the game's log) to a report. */
+export function withIssues(report: CompatReport, extra: Omit<Issue, 'id'>[], enabled: number): CompatReport {
+  if (extra.length === 0) return report;
+  const seen = new Set(report.issues.map((i) => i.id));
+  const issues = [...report.issues];
+  for (const i of extra) {
+    const id = `${i.code}:${i.subject}:${i.related.join(',')}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    issues.push({ ...i, id });
+  }
+  const errors = issues.filter((i) => i.severity === 'error').length;
+  const warnings = issues.filter((i) => i.severity === 'warning').length;
+  issues.sort((a, b) => sevRank(a.severity) - sevRank(b.severity));
+  return { ...report, issues, errors, warnings, score: scoreOf(enabled, errors, warnings) };
 }
 
 function sevRank(s: Issue['severity']) {

@@ -103,6 +103,12 @@ export interface GameDef {
   exe?: string[];
   /** game id on GameBanana */
   gamebananaId?: number;
+  /** the game's folder under steamapps/common, when it is known for sure */
+  steamFolder?: string;
+  /** other names people search the game by */
+  aliases?: string[];
+  /** taken from Thunderstore's list of games rather than written by hand */
+  catalog?: boolean;
 }
 
 export type GameStore = 'steam' | 'gog' | 'epic' | 'xbox' | 'other';
@@ -137,6 +143,57 @@ export interface ManagedGame {
 
 export type InstallReason = 'explicit' | 'dependency' | 'collection';
 
+/** What the user picked for an archive that could not be laid out by itself. */
+export interface LayoutChoice {
+  /** archive folders to install, in order (later ones win); '' is the whole archive */
+  roots: string[];
+  /** where to put them instead of working it out: a path under the deploy root, "{mod}" is the mod's name */
+  dest?: string;
+}
+
+/** A part of an archive the user can tick: a variant, an optional folder, a top-level folder. */
+export interface LayoutOption {
+  path: string;
+  files: number;
+  sample: string[];
+  suggested: boolean;
+}
+
+/** An archive that needs a decision before it installs: which variant, or where its files go. */
+export interface LayoutPrompt {
+  key: string;
+  title: string;
+  /** `variants`: several alternatives; `unknown`: nothing Lattice recognises; `extras`: the user asked to look again */
+  reason: 'variants' | 'unknown' | 'extras';
+  options: LayoutOption[];
+  dests: { id: string; label: string }[];
+  /** previous or suggested answer */
+  choice: LayoutChoice;
+}
+
+/** A Nexus file only the user can fetch: Nexus gives it to free accounts through its site alone. */
+export interface NexusNeed {
+  /** the plan item the file belongs to */
+  key: string;
+  title: string;
+  domain: string;
+  modId: number;
+  fileId: number;
+  filename: string;
+  size?: number;
+  /** the file's page on nexusmods.com */
+  page: string;
+  /** `manager`: the site hands the file to Lattice (nxm link, needs a key); `browser`: the browser saves it and Lattice picks it up */
+  via: 'manager' | 'browser';
+  state: 'waiting' | 'downloading' | 'found';
+}
+
+/** What a plan still has to ask before it applies. */
+export interface PlanPrompts {
+  fomod: FomodPrompt[];
+  layout: LayoutPrompt[];
+}
+
 export interface InstalledMod {
   key: string;
   ref: ModRef;
@@ -160,6 +217,12 @@ export interface InstalledMod {
   sourceUrl?: string;
   /** options picked in the mod's FOMOD installer */
   choices?: FomodChoices;
+  /** which parts of the archive were installed, and where, when the user had to choose */
+  layout?: LayoutChoice;
+  /** what Lattice did to put the files where the game reads them */
+  installNotes?: string[];
+  /** other variants the archive holds that were not installed */
+  extraVariants?: number;
 }
 
 export type RuleKind = 'before' | 'after';
@@ -182,6 +245,8 @@ export interface Profile {
   collections: string[];
   createdAt: string;
   deployedAt?: string;
+  /** the last time applying the profile changed files in the game folder */
+  filesChangedAt?: string;
 }
 
 export interface Snapshot {
@@ -213,6 +278,8 @@ export interface CollectionMod {
   loaders: string[];
   /** FOMOD options replayed on install, so a collection installs without questions */
   choices?: FomodChoices;
+  /** the variant of the archive that was installed, replayed the same way */
+  layout?: LayoutChoice;
 }
 
 /** A collection is a lockfile: exact versions + hashes + rules + links to other collections. */
@@ -236,6 +303,7 @@ export type Severity = 'error' | 'warning' | 'info';
 
 export type IssueCode =
   | 'missing-dep'
+  | 'catalog-dep'
   | 'disabled-dep'
   | 'version-mismatch'
   | 'conflict'
@@ -250,10 +318,13 @@ export type IssueCode =
   | 'missing-master'
   | 'duplicate'
   | 'jar-dependency'
-  | 'jar-breaks';
+  | 'jar-breaks'
+  | 'misplaced'
+  | 'needs-framework'
+  | 'not-loaded';
 
 export interface Fix {
-  kind: 'install' | 'enable' | 'disable' | 'update' | 'add-rule' | 'apply-collection';
+  kind: 'install' | 'enable' | 'disable' | 'update' | 'add-rule' | 'apply-collection' | 'restage' | 'relayout';
   label: string;
   ref?: ModRef;
   key?: string;
@@ -272,6 +343,27 @@ export interface Issue {
   fix?: Fix;
 }
 
+/** One line of Lattice's own journal: what it did, what went wrong. */
+export interface JournalEntry {
+  at: string;
+  kind: 'ok' | 'err' | 'info';
+  text: string;
+}
+
+/** What the game's own logs told about the last run. */
+export interface GameLogSummary {
+  /** the newest log file */
+  file: string;
+  at: string;
+  loaders: string[];
+  /** how many mods the loaders listed as loaded, and how many they refused */
+  loaded: number;
+  failed: number;
+  /** the game has not been started since the mods in its folder last changed */
+  stale: boolean;
+  fatal?: string;
+}
+
 export interface CompatReport {
   score: number;
   errors: number;
@@ -281,6 +373,10 @@ export interface CompatReport {
   order: string[];
   /** reverse dependency index: key -> keys that require it */
   dependents: Record<string, string[]>;
+  /** titles of projects the mods point at but the profile does not have */
+  names?: Record<string, string>;
+  /** the last run of the game, as its logs tell it */
+  log?: GameLogSummary;
 }
 
 export interface PlanRequest {
@@ -304,6 +400,8 @@ export interface PlanItem {
   fromVersion?: string;
   /** FOMOD options known in advance (previous install or a collection) */
   choices?: FomodChoices;
+  /** the archive variant known in advance (previous install or a collection) */
+  layout?: LayoutChoice;
 }
 
 /** A FOMOD installer the user still has to go through before a plan applies. */
@@ -315,6 +413,8 @@ export interface FomodPrompt {
   choices: FomodChoices;
   /** plugin files already active in the load order, for fileDependency conditions */
   activePlugins: string[];
+  /** hands the installer's pictures out: see Service.fomodImage */
+  token?: string;
 }
 
 export interface InstallPlan {
@@ -389,6 +489,8 @@ export interface Settings {
   trustedHostsSeen?: string[];
   /** snapshots kept per profile (30 when unset) */
   snapshotLimit?: number;
+  /** folder the browser saves downloads to: Lattice picks Nexus files up from there (the user's Downloads when unset) */
+  pickupDir?: string;
 }
 
 export interface AppState {

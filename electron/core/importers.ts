@@ -175,7 +175,7 @@ export async function vortexSources(env: DetectEnv, gameDirs: { defId: string; p
   }
   // the default staging folders, for games Vortex has not deployed (or purged)
   for (const def of GAME_DEFS) {
-    if (def.kind === 'minecraft') continue;
+    if (def.kind === 'minecraft' || def.catalog) continue;
     for (const id of new Set([def.id, def.id.replace(/-/g, ''), def.nexusDomain].filter(Boolean) as string[])) {
       const staging = path.join(env.appData, 'Vortex', id, 'mods');
       if (!found.has(keyOf(staging)) && (await exists(staging))) {

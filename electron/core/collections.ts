@@ -42,6 +42,7 @@ export function fromProfile(profile: Profile, meta: CollectionMeta, existing: Co
       gameVersions: m.gameVersions,
       loaders: m.loaders,
       choices: m.choices,
+      layout: m.layout,
     }));
   // Collections already applied to the profile become explicit links.
   const auto: CollectionLink[] = profile.collections

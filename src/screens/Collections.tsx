@@ -25,7 +25,9 @@ export function Collections() {
   if (!state || !profile || !game || !def) return null;
 
   const mine = state.collections.filter((c) => c.game.defId === def.id);
-  const otherCount = state.collections.length - mine.length;
+  const others = state.collections.filter((c) => c.game.defId !== def.id);
+  const defs = useUI.getState().defs;
+  const hasGame = (defId: string) => state.games.some((g) => g.defId === defId);
   const byId = new Map(state.collections.map((c) => [c.id, c]));
 
   const importFile = async () => {
@@ -192,7 +194,30 @@ export function Collections() {
               })}
             </div>
           )}
-          {otherCount > 0 && <p className="faint">{t('Ещё {0} для других игр.', plural(otherCount, 'коллекция', 'коллекции', 'коллекций'))}</p>}
+          {others.length > 0 && (
+            <div className="col" style={{ marginTop: 'var(--s-4)' }}>
+              <span className="label">{t('Для других игр')}</span>
+              <div className="link-list">
+                {others.map((c) => (
+                  <div className="link-item" key={c.id}>
+                    <span className="grow ellipsis">
+                      {c.name} <span className="faint">· {defs.find((d) => d.id === c.game.defId)?.name ?? c.game.defId}</span>
+                    </span>
+                    {hasGame(c.game.defId) ? (
+                      <span className="faint">{t('откройте эту игру, чтобы применить')}</span>
+                    ) : (
+                      <>
+                        <span className="faint">{t('игра не добавлена')}</span>
+                        <button className="btn ghost sm icon danger" title={t('Удалить из библиотеки')} aria-label={t('Удалить')} onClick={() => run(() => api.deleteCollection(c.id), t('Коллекция удалена'))}>
+                          <Trash2 size={13} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
       {create && <CollectionSheet profileId={profile.id} onClose={() => setCreate(false)} />}

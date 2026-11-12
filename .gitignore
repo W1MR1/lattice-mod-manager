@@ -9,3 +9,6 @@ demo-dist/
 release/
 smoke/
 build/*.ico
+
+# local experiments
+.scratch/

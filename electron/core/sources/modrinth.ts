@@ -183,7 +183,7 @@ export class ModrinthSource implements SourceAdapter {
     for (let i = 0; i < ids.length; i += 100) {
       const batch = ids.slice(i, i + 100);
       const list = await getJson<MrProject[]>(`${API}/projects?ids=${encodeURIComponent(JSON.stringify(batch))}`);
-      for (const p of list) out.set(`modrinth:${p.id}`, { title: p.title, iconUrl: p.icon_url ?? undefined });
+      for (const p of list) out.set(`modrinth:${p.id}`, { title: p.title, iconUrl: p.icon_url ?? undefined, loaders: p.loaders, gameVersions: p.game_versions });
     }
     return out;
   }

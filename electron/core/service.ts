@@ -30,29 +30,35 @@ import type {
   Settings,
   Snapshot,
 } from '../../shared/types';
-import type { CollectionMod, FomodPrompt, GameDef, HealthProblem, InstallInfo } from '../../shared/types';
+import type { CollectionMod, FomodPrompt, GameDef, HealthProblem, InstallInfo, JournalEntry, LayoutChoice, LayoutPrompt, NexusNeed, PlanPrompts } from '../../shared/types';
 import { keyOf } from '../../shared/types';
 import { defaultChoices, validateChoices, type FileState, type FomodChoices } from '../../shared/fomod';
-import { checkCompatibility, type PluginCheck, type PluginInfo } from './compat';
+import { checkCompatibility, withIssues, type DepInfo, type PluginCheck, type PluginInfo } from './compat';
+import { contentIssues, smapiNames, type StagedMod } from './content';
+import { logFindings, readGameLogs, type LogSubject } from './gamelog';
 import { collectionClosure, fromProfile, importMrpack, parseCollection, slugId, type CollectionMeta } from './collections';
-import { computeOverlaps, deploy, deployDrift, forgetStaged, ownedFiles, purge, stagedFiles, type DeployFailure, type DeployOptions } from './deployer';
-import { readJarMeta, type JarMeta } from './jarmeta';
+import { computeOverlaps, deploy, deployDrift, forgetStaged, ownedFiles, ownedPaths, purge, stagedFiles, type DeployFailure, type DeployOptions } from './deployer';
+import { jarView, mergeJarMeta, readJarMeta, type JarMeta } from './jarmeta';
 import { DownloadManager } from './downloader';
-import { archiveKind } from './archives';
+import { archiveKind, listArchive, readEntry } from './archives';
 import { GAME_DEFS, gameDef } from './games';
 import { detectAll, inspectFolder, launcherName, samePath, systemEnv, type DetectEnv } from './detect';
-import { FomodRequired, inspectFomod, STAGED_PREFIX, safeName, stageVersion, walk } from './installer';
+import { FomodRequired, inspectFomod, inspectLayout, LAYOUT_TAG, STAGED_PREFIX, safeName, stageVersion, walk } from './installer';
+import { hasLayout, layoutDests, TOP_FILES } from './layout';
 import { computeOrder, providerIndex } from './loadorder';
 import { PLUGIN_EXT, pluginMasters, pluginsTxtPath, restorePluginsTxt, writePluginsTxt } from './plugins';
 import { resolvePlan, type ProjectMeta, type VersionProvider } from './resolver';
 import { violatesStrict } from '../../shared/versions';
-import { loaderFits } from '../../shared/context';
+import { loaderFits, loaderLabel } from '../../shared/context';
 import { Sources } from './sources';
 import { CurseForgeSource } from './sources/curseforge';
 import { removeVortexLeftovers, scanManagers, vortexDeployedFiles, type ImportSource } from './importers';
 import { mapPool } from './http';
 import { parseNexusUrl, parseNxm, type NxmLink } from './sources/nexus';
 import { Store } from './store';
+import { Journal, redactLinks } from './journal';
+import { NexusAssist } from './nexus-assist';
+import { DiskKeeper, type DiskUsage } from './disk';
 import { collectOrphans, recomputeLinks } from './links';
 import { applyRemoval, planRemoval, type RemovalOptions } from './removal';
 import { scanLeftovers, type Leftover } from './cleanup';
@@ -132,7 +138,8 @@ export class Service extends EventEmitter {
 
   /** Public state: secrets never leave the main process. */
   state(): AppState {
-    const { local: _local, ...pub } = this.store.state;
+    // the window needs neither local versions nor the dependency cache: both only make every update heavier
+    const { local: _local, catalog: _catalog, ...pub } = this.store.state;
     const { nexusKeyEnc: _key, ...settings } = pub.settings;
     const mask = (v?: string) => (v ? '••••' : undefined);
     return {
@@ -157,7 +164,78 @@ export class Service extends EventEmitter {
   }
 
   private toast(kind: Toast['kind'], text: string, undo?: Toast['undo']) {
+    this.note(kind, text);
     this.emit('toast', { kind, text, undo } satisfies Toast);
+  }
+
+  // ---------- journal: what Lattice did and what went wrong, kept for the user to read and send
+
+  private journalLog = new Journal(
+    () => this.dir('logs', 'lattice.log'),
+    (text) => this.homeless(text),
+  );
+
+  /** Writes a line to the journal (memory and data/logs/lattice.log). */
+  note(kind: JournalEntry['kind'], text: string) {
+    this.journalLog.note(kind, text);
+  }
+
+  /** The journal of this session, newest last. */
+  journal(): JournalEntry[] {
+    return this.journalLog.list();
+  }
+
+  /** The user's home folder written as ~, so a report does not carry the Windows user name. */
+  private homeless(text: string): string {
+    const home = this.env.home;
+    return home ? text.split(home).join('~').split(home.replace(/\\/g, '/')).join('~') : text;
+  }
+
+  /**
+   * Everything needed to understand a problem, as text: versions, games, what
+   * is installed, what Lattice and the game's logs complain about, the last
+   * lines of the journal. No keys, no tokens, no user name.
+   */
+  async problemReport(): Promise<string> {
+    const s = this.store.state;
+    const out: string[] = [];
+    out.push(`Lattice ${APP_VERSION} · ${process.platform} ${process.getSystemVersion?.() ?? ''} · ${s.settings.language ?? 'en'} · ${new Date().toISOString()}`);
+    out.push(`Settings: deploy=${s.settings.deployMethod}, nexus key=${s.settings.nexusKeyEnc ? 'yes' : 'no'}${s.settings.nexusUser ? ` (premium=${s.settings.nexusUser.premium})` : ''}, nxm=${s.settings.handleNxm}, curseforge key=${s.settings.curseforgeKey || CURSEFORGE_KEY ? 'yes' : 'no'}, sources=${Object.entries(s.settings.enabledSources).filter(([, on]) => on).map(([k]) => k).join(',')}`);
+    for (const g of s.games) {
+      const def = gameDef(g.defId);
+      const p = s.profiles.find((x) => x.id === g.activeProfileId);
+      out.push('');
+      out.push(`## ${g.name} [${g.install?.store ?? g.install?.launcher ?? '?'}] — ${g.installPath}`);
+      if (!p || !def) continue;
+      const mods = Object.values(p.mods);
+      out.push(`Profile "${p.name}": ${mods.length} mods (${mods.filter((m) => m.enabled).length} on), ${[p.context.gameVersion, p.context.loader].filter(Boolean).join(' ') || 'no version'}, applied ${p.deployedAt ?? 'never'}`);
+      const bySource = new Map<string, number>();
+      for (const m of mods) bySource.set(m.ref.source, (bySource.get(m.ref.source) ?? 0) + 1);
+      out.push(`Sources: ${[...bySource].map(([k, n]) => `${k}=${n}`).join(', ') || '—'}`);
+      const report = await this.compat(p.id).catch((e) => {
+        out.push(`compat failed: ${(e as Error).message}`);
+        return null;
+      });
+      if (report) {
+        out.push(`Compatibility: score ${report.score}, errors ${report.errors}, warnings ${report.warnings}`);
+        for (const i of report.issues.filter((x) => x.severity !== 'info').slice(0, 40)) out.push(`  [${i.severity}] ${i.code} ${i.subject}: ${i.message}`);
+        if (report.log) out.push(`Game log: ${report.log.loaders.join('+')} at ${report.log.at}, loaded ${report.log.loaded}, refused ${report.log.failed}${report.log.stale ? ', older than the last change' : ''}${report.log.fatal ? `, FATAL: ${report.log.fatal}` : ''}`);
+        else out.push('Game log: none found');
+      }
+    }
+    const health = await this.healthCheck().catch(() => []);
+    out.push('');
+    out.push(`## Integrity: ${health.length ? '' : 'no problems'}`);
+    for (const h of health) out.push(`  ${h.id}: ${h.title} — ${h.detail}`);
+    out.push('');
+    out.push('## Journal (latest last)');
+    for (const e of this.journalLog.list().slice(-80)) out.push(`  ${e.at.slice(11, 19)} ${e.kind.toUpperCase()} ${e.text.replace(/\r?\n/g, ' | ')}`);
+    return redactLinks(this.homeless(out.join('\n')));
+  }
+
+  /** Saves the problem report to a file the user chose. */
+  async saveProblemReport(file: string): Promise<void> {
+    await fs.writeFile(file, await this.problemReport());
   }
 
   private profile(id: string): Profile {
@@ -246,12 +324,27 @@ export class Service extends EventEmitter {
     await this.purge(id); // files the game still holds open would otherwise stay there for good
     const s = this.store.state;
     const profileIds = new Set(s.profiles.filter((p) => p.gameId === id).map((p) => p.id));
+    const defId = s.games.find((g) => g.id === id)!.defId;
     s.games = s.games.filter((g) => g.id !== id);
     s.profiles = s.profiles.filter((p) => p.gameId !== id);
     s.snapshots = s.snapshots.filter((x) => !profileIds.has(x.profileId));
     if (s.activeGameId === id) s.activeGameId = s.games[0]?.id;
+    // collections are for a game: with its last copy gone nothing can use them, and they would only confuse
+    if (!s.games.some((g) => g.defId === defId)) {
+      const gone = s.collections.filter((c) => c.game.defId === defId);
+      if (gone.length) {
+        s.collections = s.collections.filter((c) => c.game.defId !== defId);
+        this.toast('info', t('Вместе с игрой убраны её коллекции ({0}): {1}', gone.length, gone.slice(0, 4).map((c) => `«${c.name}»`).join(', ')));
+      }
+    }
     this.changed();
     this.tidy();
+  }
+
+  /** Collections of games that are not in Lattice (left by older versions, or imported for a game not added). */
+  private orphanCollections(): Collection[] {
+    const defs = new Set(this.store.state.games.map((g) => g.defId));
+    return this.store.state.collections.filter((c) => !defs.has(c.game.defId));
   }
 
   setActiveGame(id: string) {
@@ -317,7 +410,114 @@ export class Service extends EventEmitter {
     const def = this.defOf(game);
     const pluginCheck = def.pluginsTxt ? await this.pluginCheck(p, game, def, order) : undefined;
     const jars = def.kind === 'minecraft' ? await this.jarMetas(p).catch(() => undefined) : undefined;
-    return checkCompatibility(p, this.store.state.collections, overlaps, pluginCheck, jars);
+    let report = checkCompatibility(p, this.store.state.collections, overlaps, pluginCheck, jars, await this.depKnowledge(p));
+    const enabled = Object.values(p.mods).filter((m) => m.enabled && m.stagedPath);
+    const staged: StagedMod[] = [];
+    if (def.kind !== 'minecraft') {
+      // what the files of the mods themselves show: where they lie and what they are written for
+      for (const m of enabled) {
+        const files = await stagedFiles(m.stagedPath).catch(() => null);
+        if (!files) continue;
+        const fromArchive = m.files.length > 0 && !m.files[0].url.startsWith(STAGED_PREFIX) && !/^file:.*[\\/]$/.test(m.files[0].url);
+        staged.push({ key: m.key, title: m.title, dir: m.stagedPath, files, legacy: hasLayout(def) && !path.basename(m.stagedPath).includes(LAYOUT_TAG), canRestage: fromArchive });
+      }
+      // the loader of the game's Thunderstore community, so a missing BepInEx comes with a button that installs it
+      const bepinexPack = def.kind === 'bepinex' && def.thunderstoreCommunity ? await this.sources.thunderstore.loaderPack(p.context).catch(() => undefined) : undefined;
+      report = withIssues(report, await contentIssues(def, staged, game.installPath, { bepinexPack }).catch(() => []), enabled.length);
+    }
+    // what the game itself said the last time it ran with these mods
+    const logs = await readGameLogs(def, game.installPath, this.env).catch(() => []);
+    if (logs.length) {
+      const since = Date.parse(p.filesChangedAt ?? p.deployedAt ?? '') || Date.now();
+      const found = logFindings(logs, await this.logSubjects(def, p, jars, staged), since);
+      report = { ...withIssues(report, found.issues, enabled.length), log: found.summary ?? undefined };
+    }
+    return report;
+  }
+
+  /** The names the game's loaders know each enabled mod by, to find it in their logs. */
+  private async logSubjects(def: GameDef, p: Profile, jars: Map<string, JarMeta> | undefined, staged: StagedMod[]): Promise<LogSubject[]> {
+    const out: LogSubject[] = [];
+    if (def.kind === 'minecraft') {
+      const loader = loaderLabel(p.context.loader);
+      for (const [key, meta] of jars ?? []) {
+        const m = p.mods[key];
+        const v = jarView(meta, p.context.loader);
+        if (!m?.enabled || !v.known) continue;
+        // the jar's own ids come first in the list; what it bundles is loaded along with it
+        out.push({ key, title: m.title, names: v.ids.slice(0, 1).map((id) => ({ id: id.toLowerCase(), loader })) });
+      }
+      return out;
+    }
+    const sub = (re: RegExp, loader: string | undefined, files: string[]) => [...new Set(files.map((f) => re.exec(f)?.[1]?.toLowerCase()).filter((x): x is string => !!x))].map((id) => ({ id, loader }));
+    for (const s of staged) {
+      let names: LogSubject['names'] = [];
+      if (def.id === 'stardewvalley') names = (await smapiNames(s)).map((id) => ({ id, loader: 'SMAPI' }));
+      else if (def.id === 'cyberpunk2077') {
+        names = [
+          ...sub(/^red4ext\/plugins\/([^/]+)\/[^/]+\.dll$/i, 'RED4ext', s.files),
+          ...sub(/^bin\/x64\/plugins\/cyber_engine_tweaks\/mods\/([^/]+)\/init\.lua$/i, 'Cyber Engine Tweaks', s.files),
+          ...sub(/^r6\/scripts\/([^/]+)\//i, undefined, s.files),
+        ];
+      } else if (def.id === 'skyrimse') names = sub(/^skse\/plugins\/([^/]+)\.dll$/i, 'SKSE', s.files);
+      else if (def.id === 'fallout4') names = sub(/^f4se\/plugins\/([^/]+)\.dll$/i, 'F4SE', s.files);
+      else if (def.kind === 'bepinex') names = sub(/^bepinex\/plugins\/(?:.*\/)?([^/]+)\.dll$/i, undefined, s.files);
+      out.push({ key: s.key, title: s.title, names });
+    }
+    return out;
+  }
+
+  private learning = new Set<string>();
+  /** the catalogue did not answer: it is not asked again before this time */
+  private learnAfter = 0;
+
+  /**
+   * Names and loaders of the projects mods point at but the profile does not
+   * have. Asked from the source once and remembered; a first look waits a moment
+   * for the answer, later ones never wait.
+   */
+  private async depKnowledge(p: Profile): Promise<Map<string, DepInfo>> {
+    const have = new Set([...Object.keys(p.mods), ...Object.values(p.mods).flatMap((m) => m.provides ?? [])]);
+    const want = new Map<string, ModRef>();
+    for (const m of Object.values(p.mods)) {
+      for (const d of m.deps) {
+        const k = keyOf(d.ref);
+        if (d.ref.source !== 'local' && !have.has(k)) want.set(k, d.ref);
+      }
+    }
+    const cache = (this.store.state.catalog ??= {});
+    const stale = Date.now() - 14 * 24 * 3600 * 1000;
+    const ask = Date.now() < this.learnAfter ? [] : [...want].filter(([k]) => (!cache[k] || cache[k].at < stale) && !this.learning.has(k));
+    if (ask.length) {
+      for (const [k] of ask) this.learning.add(k);
+      const job = this.sources
+        .provider(p.context)
+        .meta(ask.map(([, r]) => r))
+        .then((meta) => {
+          for (const [k] of ask) {
+            const m = meta.get(k);
+            // a project the source does not know is remembered too, so it is not asked for again at once
+            cache[k] = { title: m?.title, loaders: m?.loaders, gameVersions: m?.gameVersions, at: m ? Date.now() : stale + 24 * 3600 * 1000 };
+          }
+          const keys = Object.keys(cache);
+          if (keys.length > 4000) for (const k of keys.sort((a, b) => cache[a].at - cache[b].at).slice(0, keys.length - 4000)) delete cache[k];
+          return true;
+        })
+        .catch(() => {
+          this.learnAfter = Date.now() + 5 * 60 * 1000;
+          return false;
+        })
+        .finally(() => {
+          for (const [k] of ask) this.learning.delete(k);
+        });
+      const inTime = await Promise.race([job, new Promise<null>((r) => setTimeout(() => r(null), 1500))]);
+      // the answer came after the report was made: the window asks for the report again
+      if (inTime === null) void job.then((ok) => ok && this.changed());
+      else if (inTime) this.store.save();
+    }
+    const out = new Map<string, DepInfo>();
+    for (const k of want.keys()) if (cache[k]) out.set(k, cache[k]);
+    return out;
   }
 
   private jarCache = new Map<string, { mtime: number; meta: JarMeta }>();
@@ -450,9 +650,9 @@ export class Service extends EventEmitter {
         meta = await readJarMeta(await this.fetchFile(f, `${v.ref.projectId} ${v.version}`, p.gameId));
         this.jarOfUrl.set(f.url, meta);
       }
-      const mc = meta.depends.find((d) => d.id.toLowerCase() === 'minecraft');
-      if (mc && violatesStrict(p.context.gameVersion, mc.range)) return false;
       if (p.context.loader && meta.loaders?.length && !loaderFits(meta.loaders, p.context.loader)) return false;
+      const mc = jarView(meta, p.context.loader).depends.find((d) => d.id.toLowerCase() === 'minecraft');
+      if (mc && violatesStrict(p.context.gameVersion, mc.range)) return false;
     }
     return true;
   }
@@ -566,10 +766,16 @@ export class Service extends EventEmitter {
     plan.issues = [...extra, ...plan.issues];
     plan.ok = !plan.issues.some((i) => i.severity === 'error');
     plan.collectionIds = chain.map((c) => c.id);
-    // FOMOD options locked in the collection replay without questions.
+    // FOMOD options and archive variants locked in the collection replay without questions.
     const locked = new Map<string, FomodChoices>();
-    for (const c of chain) for (const m of c.mods) if (m.choices) locked.set(keyOf(m.ref), m.choices);
-    attachChoices(plan, p, locked);
+    const lockedLayout = new Map<string, LayoutChoice>();
+    for (const c of chain) {
+      for (const m of c.mods) {
+        if (m.choices) locked.set(keyOf(m.ref), m.choices);
+        if (m.layout) lockedLayout.set(keyOf(m.ref), m.layout);
+      }
+    }
+    attachChoices(plan, p, locked, lockedLayout);
     this.storePlan(plan);
     if (this.jarRejected) this.tidy();
     return plan;
@@ -591,6 +797,12 @@ export class Service extends EventEmitter {
         return null;
       case 'apply-collection':
         return this.planCollection(profileId, fix.collectionId!);
+      case 'restage':
+        await this.restage(profileId, [fix.key!]);
+        this.toast('ok', t('«{0}» разложен заново', this.profile(profileId).mods[fix.key!]?.title ?? fix.key!));
+        return null;
+      case 'relayout':
+        return null; // the window opens the picker (layoutPrompt) for this one
     }
   }
 
@@ -622,6 +834,9 @@ export class Service extends EventEmitter {
     const nexus = parseNexusUrl(f.url);
     if (nexus) {
       const nxm = this.nxmKeys.get(`${nexus.domain}/${nexus.modId}/${nexus.fileId}`);
+      if (!this.nexusKey() || (!this.settings.nexusUser?.premium && !nxm)) {
+        throw new Error(t('«{0}»: Nexus отдаёт этот файл только через свой сайт. Откройте установку в Lattice — он покажет, что нажать, и сам заберёт скачанный файл.', title));
+      }
       const url = await this.sources.nexus.downloadLink(nexus.domain, nexus.modId, nexus.fileId, nxm);
       if (!this.isTrusted(url)) throw new Error(t('Nexus вернул ссылку на неизвестный хост: {0}', new URL(url).hostname));
       // collections sometimes name a file by its storage hash: the link carries the real name and extension
@@ -675,31 +890,45 @@ export class Service extends EventEmitter {
    * Downloads a plan's files and returns the FOMOD installers that still need
    * the user's choices. The plan applies once they are answered.
    */
-  async inspectPlan(planId: string): Promise<FomodPrompt[]> {
+  async inspectPlan(planId: string): Promise<PlanPrompts> {
     const plan = this.plans.get(planId);
     if (!plan) throw new Error(t('План устарел, постройте его заново'));
     const profile = this.profile(plan.profileId);
     const def = this.defOf(this.game(profile.gameId));
-    if (def.kind !== 'generic') return [];
+    const out: PlanPrompts = { fomod: [], layout: [] };
+    if (def.kind === 'minecraft') return out;
     const { state, active } = await this.fileState(profile);
-    const prompts: FomodPrompt[] = [];
     await Promise.all(
       [...plan.install, ...plan.update].map(async (it) => {
         it.version = await this.ensureFiles(it.version, profile.context);
         const files = this.primaryFiles(it.version);
         if (files.length !== 1 || files[0].url.startsWith(STAGED_PREFIX)) return;
         const file = await this.fetchFile(files[0], it.title, profile.gameId);
-        const config = await inspectFomod(file).catch(() => null);
-        if (!config) return;
-        const known = it.choices && validateChoices(config, it.choices, state).length === 0 ? it.choices : undefined;
-        if (known) return;
-        prompts.push({ key: it.key, title: it.title, config, choices: it.choices ?? defaultChoices(config, state), activePlugins: active });
+        if ((await fs.stat(file).catch(() => null))?.isDirectory()) return;
+        const config = def.kind === 'generic' ? await inspectFomod(file).catch(() => null) : null;
+        if (config) {
+          const known = it.choices && validateChoices(config, it.choices, state).length === 0 ? it.choices : undefined;
+          if (!known) out.fomod.push({ key: it.key, title: it.title, config, choices: it.choices ?? defaultChoices(config, state), activePlugins: active, token: this.fomodToken(file, config.root) });
+          return;
+        }
+        if (it.layout) return; // answered before (a reinstall or a collection)
+        const lay = await inspectLayout(def, { ...it.version, files }, file, it.title).catch(() => null);
+        if (lay?.ask) {
+          out.layout.push({
+            key: it.key,
+            title: it.title,
+            reason: lay.ask.reason,
+            options: lay.ask.options,
+            dests: lay.ask.dests,
+            choice: { roots: lay.ask.options.filter((o) => o.suggested).map((o) => o.path), dest: lay.ask.reason === 'unknown' ? lay.ask.dests[0]?.id : undefined },
+          });
+        }
       }),
     );
-    return prompts;
+    return out;
   }
 
-  async applyPlan(planId: string, force = false, choices: Record<string, FomodChoices> = {}): Promise<{ applied: number; warnings: string[] }> {
+  async applyPlan(planId: string, force = false, choices: Record<string, FomodChoices> = {}, layouts: Record<string, LayoutChoice> = {}): Promise<{ applied: number; warnings: string[] }> {
     const plan = this.plans.get(planId);
     if (!plan) throw new Error(t('План устарел, постройте его заново'));
     if (!plan.ok && !force) throw new Error(t('В плане есть ошибки совместимости'));
@@ -709,7 +938,7 @@ export class Service extends EventEmitter {
     const items: PlanItem[] = [...plan.install, ...plan.update];
     const before = items.length || plan.collectionIds.length ? this.snapshot(profile.id, t('Перед: {0}', plan.label)) : null;
 
-    const staged = new Map<string, { path: string; files: ModFile[]; choices?: FomodChoices }>();
+    const staged = new Map<string, { path: string; files: ModFile[]; choices?: FomodChoices; layout?: LayoutChoice; notes: string[]; extras: number }>();
     const warnings: string[] = [];
     const failures: string[] = [];
     this.busy++;
@@ -723,18 +952,20 @@ export class Service extends EventEmitter {
           const paths = await Promise.all(files.map((f) => this.fetchFile(f, it.title, game.id)));
           const root = this.dir('staging', game.id);
           const version = { ...it.version, files };
+          // an archive nobody was asked about (a scripted install) takes the suggested variant and says so
+          const opts = { fileState: fs0?.state, layout: layouts[it.key] ?? it.layout, modName: it.title, unattended: true };
           let res;
           try {
-            res = await stageVersion(def, version, paths, root, { choices: choices[it.key] ?? it.choices, fileState: fs0?.state });
+            res = await stageVersion(def, version, paths, root, { ...opts, choices: choices[it.key] ?? it.choices });
           } catch (e) {
             if (!(e instanceof FomodRequired)) throw e;
             // Nobody answered the installer (scripted install): take its defaults, say so.
-            res = await stageVersion(def, version, paths, root, { choices: defaultChoices(e.config, fs0?.state), fileState: fs0?.state });
+            res = await stageVersion(def, version, paths, root, { ...opts, choices: defaultChoices(e.config, fs0?.state) });
             warnings.push(t('«{0}»: установщик FOMOD пройден с вариантами по умолчанию — их можно изменить в карточке мода', it.title));
           }
           forgetStaged(res.stagedPath);
           warnings.push(...res.warnings.map((w) => `«${it.title}»: ${w}`));
-          staged.set(it.key, { path: res.stagedPath, files, choices: res.choices });
+          staged.set(it.key, { path: res.stagedPath, files, choices: res.choices, layout: res.layout, notes: res.notes, extras: res.extras });
         } catch (e) {
           failures.push(`«${it.title}»: ${(e as Error).message}`);
         }
@@ -770,6 +1001,9 @@ export class Service extends EventEmitter {
       stagedPath: staged.get(it.key)!.path,
       installedAt: now,
       choices: staged.get(it.key)!.choices,
+      layout: staged.get(it.key)!.layout,
+      installNotes: staged.get(it.key)!.notes.length ? staged.get(it.key)!.notes : undefined,
+      extraVariants: staged.get(it.key)!.extras || undefined,
     });
     for (const it of plan.install) profile.mods[it.key] = toInstalled(it, profile.mods[it.key]);
     for (const it of plan.update) profile.mods[it.key] = { ...toInstalled(it, profile.mods[it.key]), enabled: profile.mods[it.key]?.enabled ?? true };
@@ -793,6 +1027,7 @@ export class Service extends EventEmitter {
       before ? { label: t('Откатить'), snapshotId: before.id } : undefined,
     );
     this.plans.delete(planId);
+    void this.nexusPickup(planId, false);
     this.tidy();
     await this.redeploy(profile.id);
     if (game.activeProfileId !== profile.id && items.length) {
@@ -1066,110 +1301,39 @@ export class Service extends EventEmitter {
   /** operations that are writing to the cache right now; cleaning waits for them */
   private busy = 0;
 
-  /** Folders of the cache that profiles and open plans use (`live`) and that only snapshots keep (`snap`). */
-  private usedPaths() {
-    const norm = (p: string) => path.resolve(p).toLowerCase();
-    const live = new Set<string>();
-    const snap = new Set<string>();
-    const keep = (set: Set<string>, m: { stagedPath?: string; files: ModFile[] }) => {
-      if (m.stagedPath) set.add(norm(m.stagedPath));
-      for (const f of m.files) if (/^https?:|^nexus:/.test(f.url)) set.add(norm(path.dirname(this.cachePath(f))));
-    };
-    for (const m of this.store.state.profiles.flatMap((p) => Object.values(p.mods))) keep(live, m);
-    // a plan still on screen keeps what it has downloaded, so trying again does not download again
-    for (const plan of this.plans.values()) for (const it of [...plan.install, ...plan.update]) keep(live, { files: it.version.files });
-    for (const m of this.store.state.snapshots.flatMap((s) => Object.values(s.mods))) keep(snap, m);
-    return { live, snap, norm };
-  }
-
-  /** Prepared copies and downloaded files no profile or open plan uses: kept only by snapshots, or by nothing. */
-  private async cacheEntries(): Promise<{ path: string; size: number; kind: 'unused' | 'snapshot' }[]> {
-    const { live, snap, norm } = this.usedPaths();
-    const active = new Set(this.downloads.list().filter((d) => !['done', 'error', 'cancelled'].includes(d.state)).map((d) => d.filename.toLowerCase()));
-    const out: { path: string; size: number; kind: 'unused' | 'snapshot' }[] = [];
-    const add = async (p: string) => {
-      const k = norm(p);
-      if (!live.has(k)) out.push({ path: p, size: await dirSize(p), kind: snap.has(k) ? 'snapshot' : 'unused' });
-    };
-    const dirsOf = async (p: string) => (await fs.readdir(p, { withFileTypes: true }).catch(() => [])).filter((e) => e.isDirectory()).map((e) => path.join(p, e.name));
-    const stagingRoot = this.dir('staging');
-    for (const gameDir of await dirsOf(stagingRoot)) {
-      const base = path.basename(gameDir);
-      if (base === '_shared') continue; // modpack files collections point to
-      if (base === '_import') {
-        out.push({ path: gameDir, size: await dirSize(gameDir), kind: 'unused' }); // leftovers of unpacked modpacks
-        continue;
-      }
-      for (const modDir of await dirsOf(gameDir)) for (const verDir of await dirsOf(modDir)) await add(verDir);
-    }
-    for (const a of await dirsOf(this.dir('downloads'))) {
-      for (const b of await dirsOf(a)) {
-        const files = await fs.readdir(b).catch(() => [] as string[]);
-        if (files.some((f) => active.has(f.replace(/\.part$/, '').toLowerCase()))) continue;
-        await add(b);
-      }
-    }
-    return out;
-  }
-
-  private async unusedEntries() {
-    return (await this.cacheEntries()).filter((e) => e.kind === 'unused');
-  }
+  private disk = new DiskKeeper({
+    dir: (...p) => this.dir(...p),
+    state: () => this.store.state,
+    openPlans: () => this.plans.values(),
+    activeDownloads: () => this.downloads.list().filter((d) => !['done', 'error', 'cancelled'].includes(d.state)).map((d) => d.filename),
+    cachePath: (f) => this.cachePath(f),
+    busy: () => this.busy > 0,
+  });
 
   /** How much space Lattice takes, how much only snapshots keep, and how much nothing needs. */
-  async diskUsage(): Promise<{ downloads: number; staging: number; unused: number; unusedCount: number; snapshots: number; snapshotCount: number; quarantine: number; quarantinePath: string }> {
-    const all = await this.cacheEntries();
-    const sum = (k: 'unused' | 'snapshot') => all.filter((e) => e.kind === k).reduce((a, x) => a + x.size, 0);
-    return {
-      downloads: await dirSize(this.dir('downloads')),
-      staging: await dirSize(this.dir('staging')),
-      unused: sum('unused'),
-      unusedCount: all.filter((e) => e.kind === 'unused').length,
-      snapshots: sum('snapshot'),
-      snapshotCount: this.store.state.snapshots.length,
-      quarantine: await dirSize(this.dir('quarantine')),
-      quarantinePath: this.dir('quarantine'),
-    };
-  }
-
-  /** At start: what a crash or a quick exit left behind, and quarantine older than a week. */
-  async cleanupOnStart() {
-    if (this.trimSnapshots() > 0) this.changed();
-    const week = Date.now() - 7 * 24 * 3600 * 1000;
-    for (const e of await fs.readdir(this.dir('quarantine'), { withFileTypes: true }).catch(() => [])) {
-      const born = Number(e.name.split('-')[0]);
-      if (e.isDirectory() && Number.isFinite(born) && born < week) await fs.rm(this.dir('quarantine', e.name), { recursive: true, force: true }).catch(() => undefined);
-    }
-    if (!(await fs.readdir(this.dir('quarantine')).catch(() => ['x'])).length) await fs.rmdir(this.dir('quarantine')).catch(() => undefined);
-    await this.freeUnused().catch(() => undefined);
+  diskUsage(): Promise<DiskUsage> {
+    return this.disk.usage();
   }
 
   /** Deletes what nothing needs; empty mod folders go too. */
-  async freeUnused(): Promise<{ removed: number; freed: number }> {
-    if (this.busy > 0) return { removed: 0, freed: 0 };
-    let removed = 0;
-    let freed = 0;
-    for (const e of await this.unusedEntries()) {
-      await fs.rm(e.path, { recursive: true, force: true }).then(
-        () => {
-          removed++;
-          freed += e.size;
-        },
-        () => undefined,
-      );
-      const parent = path.dirname(e.path);
-      if (!(await fs.readdir(parent).catch(() => ['x'])).length) await fs.rmdir(parent).catch(() => undefined);
-    }
-    return { removed, freed };
+  freeUnused(): Promise<{ removed: number; freed: number }> {
+    return this.disk.free();
+  }
+
+  /** At start: snapshots over the limit go, then old quarantine and what a crash or a quick exit left behind. */
+  async cleanupOnStart() {
+    if (this.trimSnapshots() > 0) this.changed();
+    await this.disk.cleanup();
   }
 
   /** Cleaning after an operation, without bothering the user. */
   private tidy() {
-    setTimeout(() => void this.freeUnused().catch(() => undefined), 500);
+    this.disk.tidy();
   }
 
   /** A plan that was closed without applying: what it downloaded is no longer kept for it. */
   discardPlan(planId: string) {
+    void this.nexusPickup(planId, false);
     if (this.plans.delete(planId)) this.tidy();
   }
 
@@ -1430,7 +1594,7 @@ export class Service extends EventEmitter {
     const extra = content.files.length - mods.length;
     if (extra > 0) this.toast('info', t('«{0}»: {1} дополнительных файлов тех же модов не вошли — Lattice ставит по одному файлу на мод.', c.name, extra));
     if (!this.settings.nexusUser?.premium) {
-      this.toast('info', t('В сборке «{0}» {1} файлов с Nexus. Без Premium Nexus отдаёт каждый файл только через кнопку на сайте, поэтому большие сборки удобнее ставить с Premium.', c.name, mods.length));
+      this.toast('info', t('В сборке «{0}» {1} файлов с Nexus. Без Premium Nexus отдаёт каждый только через кнопку на своём сайте: Lattice откроет страницы по очереди и сам заберёт скачанное.', c.name, mods.length));
     }
     return c;
   }
@@ -1463,14 +1627,13 @@ export class Service extends EventEmitter {
 
   /** Absolute paths (lower case) of the files Lattice has placed into a game folder. */
   private async ourFiles(game: ManagedGame): Promise<Set<string>> {
-    const root = this.deployRoot(game);
-    const rel = await ownedFiles(this.dir('deploy', game.id, 'manifest.json'), root).catch(() => new Set<string>());
-    return new Set([...rel].map((r) => path.resolve(root, r).toLowerCase()));
+    return ownedPaths(this.dir('deploy', game.id, 'manifest.json'), this.deployRoot(game), game.installPath).catch(() => new Set<string>());
   }
 
   private deployOptions(p: Profile, game: ManagedGame): DeployOptions {
     return {
       root: this.deployRoot(game),
+      gameRoot: game.installPath,
       order: computeOrder(Object.values(p.mods), p.rules).order,
       mods: p.mods,
       manifestPath: this.dir('deploy', game.id, 'manifest.json'),
@@ -1503,6 +1666,7 @@ export class Service extends EventEmitter {
       await writePluginsTxt(pluginsTxtPath(this.pluginsFolder(game, def)), this.dir('deploy', game.id), plugins);
     }
     p.deployedAt = new Date().toISOString();
+    if (res.deployed || res.removed || !p.filesChangedAt) p.filesChangedAt = p.deployedAt;
     this.changed();
     const out = { ...res, root: this.deployRoot(game) };
     this.emit('deployed', { profileId, ...out });
@@ -1676,6 +1840,15 @@ export class Service extends EventEmitter {
         });
       }
     }
+    const orphans = this.orphanCollections();
+    if (orphans.length && this.store.state.games.length) {
+      out.push({
+        id: 'orphan-collections',
+        title: t('Коллекции игр, которых нет в Lattice ({0})', orphans.length),
+        detail: t('{0}. Игру убрали, а её коллекции остались. Lattice удалит их из библиотеки; файлы игр это не затрагивает.', orphans.slice(0, 4).map((c) => `«${c.name}» (${gameDef(c.game.defId)?.name ?? c.game.defId})`).join(', ')),
+        fixable: true,
+      });
+    }
     const busy = this.downloads.list().some((d) => ['queued', 'probing', 'downloading', 'paused', 'verifying'].includes(d.state));
     const parts = busy ? [] : (await walk(this.dir('downloads')).catch(() => [] as string[])).filter((r) => r.endsWith('.part'));
     if (parts.length) {
@@ -1710,7 +1883,12 @@ export class Service extends EventEmitter {
           const now = await inspectFolder(game.defId, game.installPath, this.env);
           this.updateProfile(p.id, { context: { gameVersion: now.gameVersion, loader: now.loader ?? p.context.loader } });
         }
-        else if (pr.id === 'parts') {
+        else if (pr.id === 'orphan-collections') {
+          const ids = new Set(this.orphanCollections().map((c) => c.id));
+          this.store.state.collections = this.store.state.collections.filter((c) => !ids.has(c.id));
+          this.changed();
+          this.tidy();
+        } else if (pr.id === 'parts') {
           for (const r of (await walk(this.dir('downloads'))).filter((x) => x.endsWith('.part'))) await fs.rm(this.dir('downloads', r), { force: true });
         }
         fixed.push(pr.id);
@@ -1733,9 +1911,11 @@ export class Service extends EventEmitter {
       try {
         if (m.files.some((f) => f.url.startsWith(STAGED_PREFIX))) throw new Error(t('файлы сборки можно вернуть только повторным импортом коллекции'));
         const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title, p.gameId)));
-        const res = await stageVersion(def, installedVersion(m), paths, this.dir('staging', game.id), { choices: m.choices });
+        const res = await stageVersion(def, installedVersion(m), paths, this.dir('staging', game.id), { choices: m.choices, layout: m.layout, modName: m.title, unattended: true });
         forgetStaged(res.stagedPath);
         m.stagedPath = res.stagedPath;
+        m.installNotes = res.notes.length ? res.notes : undefined;
+        m.extraVariants = res.extras || undefined;
       } catch (e) {
         errors.push(`«${m.title}»: ${(e as Error).message}`);
       }
@@ -1769,7 +1949,32 @@ export class Service extends EventEmitter {
     const config = await inspectFomod(file);
     if (!config) return null;
     const { state, active } = await this.fileState(p);
-    return { key, title: m.title, config, choices: m.choices ?? defaultChoices(config, state), activePlugins: active };
+    return { key, title: m.title, config, choices: m.choices ?? defaultChoices(config, state), activePlugins: active, token: this.fomodToken(file, config.root) };
+  }
+
+  /** archives whose installers are on screen, by token: their pictures are read on request */
+  private fomodSources = new Map<string, { file: string; root: string; names?: string[] }>();
+
+  private fomodToken(file: string, root: string): string {
+    const token = createHash('sha1').update(`${file}|${root}`).digest('hex').slice(0, 16);
+    this.fomodSources.set(token, { file, root });
+    if (this.fomodSources.size > 40) this.fomodSources.delete(this.fomodSources.keys().next().value!);
+    return token;
+  }
+
+  /** One picture of a FOMOD installer as a data URL; only image files of that archive are served. */
+  async fomodImage(token: string, rel: string): Promise<string | null> {
+    const src = this.fomodSources.get(token);
+    const ext = /\.(png|jpe?g|gif|webp|bmp)$/i.exec(rel ?? '')?.[1]?.toLowerCase();
+    if (!src || !ext) return null;
+    src.names ??= (await listArchive(src.file)).map((n) => n.replace(/\\/g, '/'));
+    const want = `${src.root}${rel.replace(/\\/g, '/').replace(/^\/+/, '')}`.toLowerCase();
+    const entry = src.names.find((n) => n.toLowerCase() === want);
+    if (!entry) return null;
+    const buf = await readEntry(src.file, entry).catch(() => null);
+    if (!buf || buf.length > 6 * 1024 * 1024) return null;
+    const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`;
+    return `data:${mime};base64,${buf.toString('base64')}`;
   }
 
   /** Re-runs a mod's FOMOD installer with new options and redeploys. */
@@ -1788,12 +1993,63 @@ export class Service extends EventEmitter {
     this.snapshot(profileId, t('Перед сменой опций «{0}»', m.title));
     const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title, p.gameId)));
     const version: ModVersion = { ...installedVersion(m) };
-    const res = await stageVersion(def, version, paths, this.dir('staging', game.id), { choices, fileState: state });
+    const res = await stageVersion(def, version, paths, this.dir('staging', game.id), { choices, fileState: state, modName: m.title });
     forgetStaged(res.stagedPath);
     m.stagedPath = res.stagedPath;
     m.choices = res.choices;
     this.changed();
     this.toast('ok', t('«{0}» переустановлен с новыми опциями', m.title));
+    if (game.activeProfileId === profileId) await this.deploy(profileId).catch((e) => this.toast('err', (e as Error).message));
+  }
+
+  // ---------- archive variants and layout
+
+  /** Everything an installed mod's archive offers: its variants, optional folders and top folders. */
+  async layoutPrompt(profileId: string, key: string): Promise<LayoutPrompt | null> {
+    const p = this.profile(profileId);
+    const m = p.mods[key];
+    if (!m) throw new Error(t('Мод не найден'));
+    const def = this.defOf(this.game(p.gameId));
+    const f = m.files[0];
+    if (!f || f.url.startsWith(STAGED_PREFIX) || !hasLayout(def)) return null;
+    const file = await this.fetchFile(f, m.title, p.gameId);
+    if ((await fs.stat(file).catch(() => null))?.isDirectory()) return null;
+    const plan = await inspectLayout(def, installedVersion(m), file, m.title);
+    if (!plan) return null;
+    // the whole archive laid out by Lattice, each variant it found, then the top folders for a choice by hand
+    const seen = new Set<string>();
+    const options = [...(plan.ask?.options ?? []), ...plan.extras].filter((o) => !seen.has(o.path) && seen.add(o.path));
+    const names = (await inspectLayout(def, installedVersion(m), file, m.title, { roots: [''], dest: '' }))?.map ?? new Map<string, string>();
+    for (const n of names.keys()) {
+      const top = n.includes('/') ? `${n.slice(0, n.indexOf('/'))}/` : TOP_FILES;
+      if (seen.has(top) || options.some((o) => top !== TOP_FILES && o.path.startsWith(top))) continue;
+      seen.add(top);
+      const inside = [...names.keys()].filter((x) => (top === TOP_FILES ? !x.includes('/') : x.startsWith(top)));
+      options.push({ path: top, files: inside.length, sample: inside.slice(0, 4).map((x) => (top === TOP_FILES ? x : x.slice(top.length))), suggested: false });
+    }
+    const current = m.layout ?? { roots: plan.ask ? plan.ask.options.filter((o) => o.suggested).map((o) => o.path) : [''] };
+    return { key, title: m.title, reason: plan.ask?.reason ?? 'extras', options, dests: layoutDests(def), choice: current };
+  }
+
+  /** Installs a mod's archive again with another variant, or to a place chosen by hand. */
+  async reinstallWithLayout(profileId: string, key: string, choice: LayoutChoice) {
+    const p = this.profile(profileId);
+    const m = p.mods[key];
+    if (!m) throw new Error(t('Мод не найден'));
+    const game = this.game(p.gameId);
+    const def = this.defOf(game);
+    const layout: LayoutChoice = { roots: choice.roots.length ? choice.roots : [''], dest: choice.dest };
+    this.snapshot(profileId, t('Перед сменой варианта «{0}»', m.title));
+    const paths = await Promise.all(m.files.map((f) => this.fetchFile(f, m.title, p.gameId)));
+    const res = await stageVersion(def, installedVersion(m), paths, this.dir('staging', game.id), { layout, modName: m.title });
+    forgetStaged(res.stagedPath);
+    m.stagedPath = res.stagedPath;
+    m.layout = layout;
+    m.installNotes = res.notes.length ? res.notes : undefined;
+    m.extraVariants = res.extras || undefined;
+    this.changed();
+    this.toast('ok', t('«{0}» переустановлен: {1}', m.title, plural(res.fileCount, 'файл', 'файла', 'файлов')));
+    this.tidy();
     if (game.activeProfileId === profileId) await this.deploy(profileId).catch((e) => this.toast('err', (e as Error).message));
   }
 
@@ -1831,21 +2087,78 @@ export class Service extends EventEmitter {
    * An nxm:// link from "Mod Manager Download" on nexusmods.com: remembers its
    * one-time key and builds the install plan for the active game that matches.
    */
-  async handleNxm(url: string): Promise<InstallPlan> {
+  async handleNxm(url: string): Promise<InstallPlan | null> {
     const link = parseNxm(url);
     if (!link) throw new Error(t('Не похоже на ссылку nxm://'));
     if (link.expires && link.expires * 1000 < Date.now()) throw new Error(t('Ссылка Nexus устарела — нажмите кнопку на сайте ещё раз'));
+    this.nxmKeys.set(`${link.domain}/${link.modId}/${link.fileId}`, link);
+    // a file some plan is waiting for: it downloads now and the plan goes on, no new plan opens
+    if (await this.nexusAssist.offer(link)) return null;
     const s = this.store.state;
     const candidates = s.games.filter((g) => gameDef(g.defId)?.nexusDomain === link.domain);
     const game = candidates.find((g) => g.id === s.activeGameId) ?? candidates[0];
     if (!game) throw new Error(t('Игра {0} не добавлена в Lattice', link.domain));
-    this.nxmKeys.set(`${link.domain}/${link.modId}/${link.fileId}`, link);
     if (s.activeGameId !== game.id) {
       s.activeGameId = game.id;
       this.changed();
     }
     const plan = await this.planInstall(game.activeProfileId, [{ ref: { source: 'nexus', projectId: `${link.domain}/${link.modId}` }, versionId: String(link.fileId) }]);
     this.emit('plan', plan);
+    return plan;
+  }
+
+  // ---------- Nexus without Premium (the work is in nexus-assist.ts)
+
+  private nexusAssist = new NexusAssist({
+    planFiles: async (planId) => {
+      const plan = this.plans.get(planId);
+      if (!plan) throw new Error(t('План устарел, постройте его заново'));
+      const profile = this.profile(plan.profileId);
+      const out: { key: string; title: string; file: ModFile }[] = [];
+      for (const it of [...plan.install, ...plan.update]) {
+        it.version = await this.ensureFiles(it.version, profile.context).catch(() => it.version);
+        for (const file of this.primaryFiles(it.version)) out.push({ key: it.key, title: it.title, file });
+      }
+      return out;
+    },
+    cachePath: (f) => this.cachePath(f),
+    folder: () => this.pickupFolder(),
+    hasKey: () => !!this.nexusKey(),
+    premium: () => this.settings.nexusUser?.premium === true,
+    opensNxm: () => this.settings.handleNxm,
+    link: (domain, modId, fileId) => this.nxmKeys.get(`${domain}/${modId}/${fileId}`),
+    fetch: (f, title) => this.fetchFile(f, title, this.store.state.activeGameId),
+    changed: (planId, needs) => this.emit('nexus', { planId, needs }),
+  });
+
+  /** The folder the browser saves downloads to. */
+  pickupFolder(): string {
+    return this.settings.pickupDir || path.join(this.env.home, 'Downloads');
+  }
+
+  /** Nexus files of a plan that Lattice cannot fetch by itself: no Premium, and no download key from the site yet. */
+  nexusNeeds(planId: string): Promise<NexusNeed[]> {
+    return this.nexusAssist.needs(planId);
+  }
+
+  /** Starts or stops watching the downloads folder for the files a plan waits for. */
+  nexusPickup(planId: string, on: boolean): Promise<NexusNeed[]> {
+    return this.nexusAssist.pickup(planId, on);
+  }
+
+  /** A file the user points at for a waiting Nexus download (it is copied, the original stays). */
+  nexusProvide(planId: string, fileId: number, source: string): Promise<NexusNeed[]> {
+    return this.nexusAssist.provide(planId, fileId, source);
+  }
+
+  /** Takes mods out of a plan that is still open (a Nexus file the user decided not to fetch). */
+  planDrop(planId: string, keys: string[]): InstallPlan {
+    const plan = this.plans.get(planId);
+    if (!plan) throw new Error(t('План устарел, постройте его заново'));
+    const gone = new Set(keys);
+    plan.install = plan.install.filter((i) => !gone.has(i.key));
+    plan.update = plan.update.filter((i) => !gone.has(i.key));
+    this.nexusAssist.drop(planId, gone);
     return plan;
   }
 
@@ -1928,16 +2241,12 @@ export class Service extends EventEmitter {
   }
 }
 
-/** Bytes in a folder and everything under it. */
-async function dirSize(p: string): Promise<number> {
-  let n = 0;
-  for (const rel of await walk(p).catch(() => [] as string[])) n += (await fs.stat(path.join(p, rel)).catch(() => null))?.size ?? 0;
-  return n;
-}
-
 /** Carries known FOMOD options into a plan: the last install's, or a collection's lock. */
-function attachChoices(plan: InstallPlan, p: Profile, locked: Map<string, FomodChoices> = new Map()) {
-  for (const it of [...plan.install, ...plan.update]) it.choices = locked.get(it.key) ?? p.mods[it.key]?.choices;
+function attachChoices(plan: InstallPlan, p: Profile, locked: Map<string, FomodChoices> = new Map(), lockedLayout: Map<string, LayoutChoice> = new Map()) {
+  for (const it of [...plan.install, ...plan.update]) {
+    it.choices = locked.get(it.key) ?? p.mods[it.key]?.choices;
+    it.layout = lockedLayout.get(it.key) ?? p.mods[it.key]?.layout;
+  }
 }
 
 function installedVersion(m: InstalledMod): ModVersion {
@@ -1975,13 +2284,4 @@ function lockedMessage(failed: DeployFailure[]): string {
   );
 }
 
-/** One mod's jars (a main jar and add-ons) as one declaration. */
-function mergeJarMeta(metas: JarMeta[]): JarMeta {
-  return {
-    ids: metas.flatMap((x) => x.ids),
-    versions: Object.assign({}, ...metas.map((x) => x.versions)),
-    depends: metas.flatMap((x) => x.depends),
-    breaks: metas.flatMap((x) => x.breaks),
-    loaders: [...new Set(metas.flatMap((x) => x.loaders ?? []))],
-  };
-}
+

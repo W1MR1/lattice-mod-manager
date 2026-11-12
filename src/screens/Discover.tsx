@@ -7,7 +7,7 @@ import { fitsContext } from '../../shared/context';
 import { api, bridge } from '../api';
 import { ago, count, SOURCE_LABEL } from '../format';
 import { useActive, useUI } from '../store';
-import { Empty, ModIcon, Spinner, StatusChip, Switch } from '../components/ui';
+import { Empty, ModIcon, SevIcon, Spinner, StatusChip, Switch } from '../components/ui';
 import { t, tk } from '../../shared/i18n';
 
 const KINDS: [ProjectKind, string][] = [
@@ -210,6 +210,14 @@ export function Discover() {
             <Empty title={t("Ничего не нашлось")} text={compatible ? t('Попробуйте выключить «Только совместимые» или изменить запрос.') : t('Попробуйте другой запрос.')} />
           ) : (
             <>
+              {source === 'github' && (
+                <div className="issue-row" style={{ marginBottom: 12, border: '1px solid var(--line)', borderRadius: 'var(--r-md)' }}>
+                  <SevIcon s="warning" />
+                  <span className="msg">
+                    {t('GitHub — не каталог модов: репозиторий может выложить кто угодно, а звёзды накручивают. Под видом модов и читов там распространяют программы, которые крадут пароли. Ставьте то, что знаете: проекты, на которые ссылается сам автор мода или его страница на Modrinth, Nexus, Thunderstore.')}
+                  </span>
+                </div>
+              )}
               <div className="row" style={{ marginBottom: 12 }}>
                 <span className="faint">
                   {t('{0} результатов · {1}', count(total), SOURCE_LABEL[source])}

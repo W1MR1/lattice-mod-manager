@@ -3,19 +3,10 @@ export const APP_VERSION = __APP_VERSION__;
 
 // Typed bridge to the main process (see electron/preload.ts).
 import type { Service, Toast } from '../electron/core/service';
-import type { AppState, DownloadView, InstallPlan } from '../shared/types';
+import type { AppState, DownloadView, InstallPlan, NexusNeed } from '../shared/types';
+import type { ApiMethod } from '../shared/api';
 
-type Methods =
-  | 'state' | 'gameDefs' | 'detectGames' | 'minecraftVersions' | 'addGame' | 'removeGame' | 'setActiveGame'
-  | 'createProfile' | 'updateProfile' | 'deleteProfile' | 'switchProfile' | 'compat' | 'search' | 'project' | 'versions'
-  | 'planInstall' | 'planUpdates' | 'planCollection' | 'applyFix' | 'applyPlan' | 'setEnabled' | 'dependentsOf' | 'removeMod'
-  | 'addRule' | 'removeRule' | 'setUserLink' | 'importLocal' | 'createCollection' | 'updateCollection' | 'relockCollection'
-  | 'deleteCollection' | 'exportCollection' | 'importCollectionFile' | 'importModpack' | 'createProfileForCollection'
-  | 'removeCollectionFromProfile' | 'deploy' | 'purge' | 'snapshot' | 'rollback' | 'deleteSnapshot' | 'updateSettings'
-  | 'inspectPlan' | 'fomodPrompt' | 'reinstallWithChoices' | 'pluginOrder' | 'setNexusKey' | 'clearNexusKey' | 'handleNxm'
-  | 'nexusSsoAvailable' | 'loginWithNexus'
-  | 'previewRemoval' | 'removeMods' | 'removeAllMods' | 'deleteLeftovers' | 'launchGame' | 'setGamePath' | 'healthCheck' | 'repair'
-  | 'exportProfile' | 'backupAll' | 'restoreBackup' | 'curseforgeAvailable' | 'curseforgeCheck' | 'modrinthAccount' | 'modrinthList' | 'scanImports' | 'importPlan' | 'setLauncherExe' | 'diskUsage' | 'freeUnused' | 'discardPlan';
+type Methods = ApiMethod;
 
 type Fn<K extends Methods> = Service[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
 export type Api = { [K in Methods]: Fn<K> };
@@ -38,6 +29,7 @@ interface Bridge {
   dialog(kind: 'backup-open'): Promise<string | null>;
   dialog(kind: 'exe'): Promise<string | null>;
   dialog(kind: 'backup-save', defaultName?: string): Promise<string | null>;
+  dialog(kind: 'report-save', defaultName?: string): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   openPath(p: string): Promise<void>;
   fileIcon(p: string): Promise<string | null>;
@@ -50,6 +42,7 @@ interface Bridge {
   on(event: 'deployed', cb: (d: unknown) => void): () => void;
   on(event: 'plan', cb: (p: InstallPlan) => void): () => void;
   on(event: 'update', cb: (u: UpdateEvent) => void): () => void;
+  on(event: 'nexus', cb: (n: { planId: string; needs: NexusNeed[] }) => void): () => void;
 }
 
 declare global {

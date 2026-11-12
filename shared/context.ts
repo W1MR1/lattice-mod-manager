@@ -8,6 +8,13 @@ const LOADER_ACCEPTS: Record<string, string[]> = {
   quilt: ['quilt', 'fabric'],
 };
 
+const LOADER_NAME: Record<string, string> = { fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge' };
+
+/** A loader as people write it: "Fabric", "NeoForge". */
+export function loaderLabel(loader?: string): string {
+  return LOADER_NAME[loader ?? ''] ?? loader ?? '';
+}
+
 export function loaderFits(loaders: string[], loader?: string): boolean {
   if (!loader || loaders.length === 0) return true;
   const modLoaders = loaders.filter((l) => MOD_LOADERS.has(l));

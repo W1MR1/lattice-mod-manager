@@ -238,6 +238,7 @@ export async function unpackTo(file: string, dir: string): Promise<void> {
 
 /** Reads one entry into memory, or null when it is absent. */
 export async function readEntry(file: string, name: string): Promise<Buffer | null> {
+  if (safeRel(name) === null) return null; // an entry that points outside is never followed
   return withTemp(async (tmp) => {
     await unpackAll(file, tmp, [name]);
     try {

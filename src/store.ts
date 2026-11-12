@@ -4,8 +4,8 @@ import { api, bridge, type UpdateEvent } from './api';
 import { setLang, type Lang } from '../shared/i18n';
 import { t } from '../shared/i18n';
 
-export type Route = 'mods' | 'discover' | 'graph' | 'collections' | 'downloads' | 'snapshots' | 'settings';
-export const ROUTES: Route[] = ['mods', 'discover', 'graph', 'collections', 'downloads', 'snapshots', 'settings'];
+export type Route = 'home' | 'mods' | 'discover' | 'graph' | 'collections' | 'downloads' | 'snapshots' | 'settings';
+export const ROUTES: Route[] = ['home', 'mods', 'discover', 'graph', 'collections', 'downloads', 'snapshots', 'settings'];
 
 export interface ToastItem {
   id: number;
@@ -31,6 +31,13 @@ interface UI {
   discoverText: string | null;
   /** problems found by the start-up check, shown once */
   health: HealthProblem[] | null;
+  /** the mod whose archive variants are being picked again */
+  relayout: string | null;
+  /** the command palette (Ctrl+K) and the journal window */
+  paletteOpen: boolean;
+  journalOpen: boolean;
+  /** errors shown since the journal was last opened */
+  unreadErrors: number;
   update: UpdateEvent | null;
   checkHealth(manual?: boolean): Promise<void>;
   init(): Promise<void>;
@@ -52,7 +59,7 @@ let compatTimer: ReturnType<typeof setTimeout> | null = null;
 
 const routeFromHash = (): Route => {
   const h = location.hash.replace(/^#\/?/, '') as Route;
-  return ROUTES.includes(h) ? h : 'mods';
+  return ROUTES.includes(h) ? h : 'home';
 };
 
 export const useUI = create<UI>((set, get) => ({
@@ -68,6 +75,10 @@ export const useUI = create<UI>((set, get) => ({
   addGameOpen: false,
   toasts: [],
   health: null,
+  relayout: null,
+  paletteOpen: false,
+  journalOpen: false,
+  unreadErrors: 0,
   update: null,
   discoverText: null,
 
@@ -86,15 +97,23 @@ export const useUI = create<UI>((set, get) => ({
     applyLang(state.settings.language);
     set({ state, defs, downloads, ready: true });
     applyTheme(state.settings.theme);
-    bridge.on('state', (s) => {
-      const prev = get().state?.settings.theme;
-      // before the state lands, so the next render already speaks the new language
-      if (s.settings.language !== get().state?.settings.language) applyLang(s.settings.language);
-      set({ state: s });
-      if (prev !== s.settings.theme) applyTheme(s.settings.theme);
-      scheduleCompat();
-    });
-    bridge.on('downloads', (d) => set({ downloads: d }));
+    bridge.on(
+      'state',
+      latest((s) => {
+        const prev = get().state?.settings.theme;
+        // before the state lands, so the next render already speaks the new language
+        if (s.settings.language !== get().state?.settings.language) applyLang(s.settings.language);
+        // another game or profile: its score is not known yet, and the old one must not stand in for it
+        const moved = activeProfile(s)?.id !== activeProfile(get().state)?.id;
+        set(moved ? { state: s, report: null, selected: null } : { state: s });
+        if (prev !== s.settings.theme) applyTheme(s.settings.theme);
+        scheduleCompat();
+      }),
+    );
+    bridge.on(
+      'downloads',
+      latest((d) => set({ downloads: d })),
+    );
     bridge.on('toast', (t) => get().toast(t.kind, t.text, t.undo));
     // an nxm:// link from nexusmods.com arrives as a ready plan
     bridge.on('plan', (p) => set({ plan: p, planning: null }));
@@ -115,7 +134,7 @@ export const useUI = create<UI>((set, get) => ({
 
   toast(kind, text, undo) {
     const id = ++toastSeq;
-    set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, text, undo }] }));
+    set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, text, undo }], unreadErrors: s.unreadErrors + (kind === 'err' ? 1 : 0) }));
     // a toast that offers undo stays long enough to use it
     setTimeout(() => get().dismiss(id), kind === 'err' ? 9000 : undo ? 10000 : 4500);
   },
@@ -168,6 +187,33 @@ export const useUI = create<UI>((set, get) => ({
     }
   },
 }));
+
+/**
+ * A big install sends hundreds of full lists in a row. Each one would redraw
+ * the whole window and the picture would fall seconds behind; only the newest
+ * matters, so the ones that arrive within a frame of each other are skipped.
+ */
+function latest<T>(apply: (v: T) => void): (v: T) => void {
+  let pending: T;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let done = -Infinity;
+  const now = (v: T) => {
+    apply(v);
+    // counted from the end of the redraw: a slow redraw must not let the next one start at once
+    done = performance.now();
+  };
+  return (v) => {
+    pending = v;
+    if (timer) return;
+    const wait = done + 16 - performance.now();
+    // a lone update is shown at once; only a burst waits for its last one
+    if (wait <= 0) return now(v);
+    timer = setTimeout(() => {
+      timer = null;
+      now(pending);
+    }, wait);
+  };
+}
 
 function scheduleCompat() {
   if (compatTimer) clearTimeout(compatTimer);

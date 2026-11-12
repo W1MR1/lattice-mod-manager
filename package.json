@@ -1,7 +1,7 @@
 {
   "name": "lattice-mod-manager",
   "productName": "Lattice",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Менеджер модов и коллекций с графом совместимости и многопоточными загрузками там, где источник это разрешает",
   "author": "Lattice contributors",
   "license": "GPL-3.0-or-later",
@@ -20,7 +20,8 @@
     "build:demo": "vite build --config vite.demo.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "i18n": "node scripts/i18n.mjs"
+    "i18n": "node scripts/i18n.mjs",
+    "games": "node scripts/thunderstore-games.mjs"
   },
   "dependencies": {
     "7zip-bin": "5.2.0",
@@ -61,7 +62,11 @@
     "files": [
       "dist/**",
       "dist-electron/**",
-      "package.json"
+      "package.json",
+      "!node_modules/7zip-bin/linux/**",
+      "!node_modules/7zip-bin/mac/**",
+      "!node_modules/7zip-bin/win/ia32/**",
+      "!node_modules/7zip-bin/win/arm64/**"
     ],
     "asarUnpack": [
       "node_modules/7zip-bin/**",
@@ -103,6 +108,15 @@
         "owner": "W1MR1",
         "repo": "lattice-mod-manager"
       }
+    ],
+    "electronLanguages": [
+      "en-US",
+      "ru",
+      "zh-CN",
+      "es",
+      "es-419",
+      "pt-BR",
+      "de"
     ]
   }
 }

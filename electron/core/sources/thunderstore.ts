@@ -7,6 +7,7 @@ import type { GameContext, GameDef, ModProject, ModRef, ModVersion, SearchQuery,
 import type { ProjectMeta } from '../resolver';
 import { getMaybeGzipJson, mapPool } from '../http';
 import type { SourceAdapter } from './types';
+import { isBepInExPack, isThunderstoreMod } from '../games';
 import { t } from '../../../shared/i18n';
 
 interface TsVersion {
@@ -38,6 +39,26 @@ interface Index {
   at: number;
   byName: Map<string, TsPackage>;
   list: TsPackage[];
+  /** the community's own BepInEx pack: the loader its mods are started by */
+  loader?: string;
+}
+
+/**
+ * What a package asks for, in this community. Two things the listing itself
+ * does not say:
+ * - a package shared between communities names the loader of the community it
+ *   was written in; here that means this community's loader;
+ * - a plugin that names no loader at all still cannot start without one.
+ */
+export function communityDeps(projectId: string, raw: string[], has: (id: string) => boolean, loader: string | undefined): { projectId: string; version?: string }[] {
+  const out = new Map<string, { projectId: string; version?: string }>();
+  for (const d of raw.map(parseDependency)) {
+    if (!d) continue;
+    const here = loader && isBepInExPack(d.projectId) && !has(d.projectId) ? { projectId: loader } : d;
+    if (!out.has(here.projectId)) out.set(here.projectId, here);
+  }
+  if (loader && !isBepInExPack(projectId) && ![...out.keys()].some(isBepInExPack)) out.set(loader, { projectId: loader });
+  return [...out.values()];
 }
 
 const MEMORY_TTL = 30 * 60_000;
@@ -53,6 +74,7 @@ export function parseDependency(s: string): { projectId: string; version: string
 export class ThunderstoreSource implements SourceAdapter {
   private indexes = new Map<string, Index>();
   private loading = new Map<string, Promise<Index>>();
+  private loaders = new Map<string, string | undefined>();
 
   constructor(
     private cacheDir: () => string,
@@ -95,7 +117,8 @@ export class ThunderstoreSource implements SourceAdapter {
       await fs.mkdir(path.dirname(file), { recursive: true });
       await fs.writeFile(file, gzipSync(Buffer.from(JSON.stringify(list))));
     }
-    const idx: Index = { at, list, byName: new Map(list.map((p) => [p.full_name, p])) };
+    const idx: Index = { at, list, loader: loaderOf(list), byName: new Map(list.map((p) => [p.full_name, p])) };
+    this.loaders.set(community, idx.loader);
     this.indexes.set(community, idx);
     return idx;
   }
@@ -106,7 +129,7 @@ export class ThunderstoreSource implements SourceAdapter {
     const words = text.split(/\s+/).filter(Boolean);
     const scored: { p: TsPackage; s: number }[] = [];
     for (const p of idx.list) {
-      if (p.is_deprecated || p.has_nsfw_content || p.versions.length === 0) continue;
+      if (p.is_deprecated || p.has_nsfw_content || p.versions.length === 0 || !isThunderstoreMod(p.full_name)) continue;
       // modpacks are packages that only depend on other packages
       const pack = p.categories.some((c) => /modpack/i.test(c));
       if ((q.kind === 'modpack') !== pack) continue;
@@ -141,16 +164,30 @@ export class ThunderstoreSource implements SourceAdapter {
       loaders: [],
       published: v.date_created,
       files: [{ url: v.download_url, filename: `${v.full_name}.zip`, size: v.file_size, hashes: {}, primary: true }],
-      deps: v.dependencies
-        .map(parseDependency)
-        .filter((d): d is NonNullable<typeof d> => d !== null)
-        .map((d) => ({
-          ref: { source: 'thunderstore' as const, projectId: d.projectId },
-          kind: 'requires' as const,
-          range: `>=${d.version}`,
-          name: d.projectId.split('-').slice(1).join('-'),
-        })),
+      deps: communityDeps(ref.projectId, v.dependencies, (id) => idx.byName.has(id), idx.loader).map((d) => ({
+        ref: { source: 'thunderstore' as const, projectId: d.projectId },
+        kind: 'requires' as const,
+        range: d.version ? `>=${d.version}` : undefined,
+        name: d.projectId.split('-').slice(1).join('-'),
+      })),
     }));
+  }
+
+  /**
+   * The BepInEx pack of the game's community, from what is already on this
+   * computer: asked on every compatibility check, so it never goes to the network.
+   */
+  async loaderPack(ctx: GameContext): Promise<string | undefined> {
+    const community = this.community(ctx);
+    if (this.loaders.has(community)) return this.loaders.get(community);
+    let loader: string | undefined;
+    try {
+      loader = loaderOf(JSON.parse(gunzipSync(await fs.readFile(path.join(this.cacheDir(), `thunderstore-${community}.json.gz`))).toString('utf8')));
+    } catch {
+      return undefined; // no index yet: the next search or plan brings it
+    }
+    this.loaders.set(community, loader);
+    return loader;
   }
 
   async project(ref: ModRef, ctx: GameContext): Promise<ModProject | null> {
@@ -168,6 +205,12 @@ export class ThunderstoreSource implements SourceAdapter {
     }
     return out;
   }
+}
+
+/** The loader of a community: the most downloaded BepInEx pack its index lists. */
+function loaderOf(list: TsPackage[]): string | undefined {
+  const downloads = (p: TsPackage) => p.versions.reduce((a, v) => a + v.downloads, 0);
+  return list.filter((p) => isBepInExPack(p.full_name) && !p.is_deprecated && p.versions.length > 0).sort((a, b) => downloads(b) - downloads(a))[0]?.full_name;
 }
 
 function trim(p: TsPackage): TsPackage {

@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { ArrowRight, CornerDownRight, Library, Package } from 'lucide-react';
-import type { FomodPrompt, InstallPlan, PlanItem } from '../../shared/types';
+import type { InstallPlan, LayoutChoice, NexusNeed, PlanItem, PlanPrompts } from '../../shared/types';
 import type { FomodChoices } from '../../shared/fomod';
 import { FomodWizard } from './FomodWizard';
+import { LayoutWizard } from './LayoutPicker';
+import { NexusChecklist } from './NexusChecklist';
 import { api } from '../api';
 import { bytes, plural, SOURCE_LABEL, speed } from '../format';
 import { useActive, useUI } from '../store';
@@ -45,25 +47,42 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
   const names = new Set([...plan.install, ...plan.update].map((i) => i.title));
   const live = downloads.filter((d) => names.has(d.title) && d.state !== 'done');
 
-  const [prompts, setPrompts] = useState<FomodPrompt[] | null>(null);
-  const apply = async (choices?: Record<string, FomodChoices>) => {
+  // questions the archives raise once they are downloaded: installer options first, then variants
+  const [prompts, setPrompts] = useState<PlanPrompts | null>(null);
+  const [answers, setAnswers] = useState<Record<string, FomodChoices> | null>(null);
+  // Nexus files a free account has to fetch through the site, before anything else can go on
+  const [needs, setNeeds] = useState<NexusNeed[] | null>(null);
+  const apply = async (choices?: Record<string, FomodChoices>, layouts?: Record<string, LayoutChoice>) => {
     setBusy(true);
     try {
-      if (!choices) {
-        // download first: archives with a FOMOD installer need answers before anything changes
-        const pending = await api.inspectPlan(plan.id);
-        if (pending.length) {
-          setPrompts(pending);
-          return;
-        }
+      const waiting = await api.nexusPickup(plan.id, true);
+      if (waiting.some((n) => n.state !== 'found')) {
+        setNeeds(waiting);
+        return;
       }
-      await api.applyPlan(plan.id, force, choices ?? {});
+      setNeeds(null);
+      let pending = prompts;
+      if (!pending) {
+        // download first: archives that need answers get them before anything changes
+        pending = await api.inspectPlan(plan.id);
+        setPrompts(pending);
+      }
+      if (pending.fomod.length && !choices) return;
+      if (pending.layout.length && !layouts) {
+        setAnswers(choices ?? {});
+        return;
+      }
+      await api.applyPlan(plan.id, force, choices ?? {}, layouts ?? {});
       onClose();
     } catch (e) {
       toast('err', (e as Error).message);
     } finally {
       setBusy(false);
     }
+  };
+  const cancelPrompts = () => {
+    setPrompts(null);
+    setAnswers(null);
   };
 
   return (
@@ -92,9 +111,9 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
           <button className="btn ghost" onClick={onClose} disabled={busy}>
             {t('Отмена')}
           </button>
-          <button className="btn primary" disabled={busy || nothing || (!plan.ok && !force)} onClick={() => apply()}>
+          <button className="btn primary" disabled={busy || nothing || (!plan.ok && !force) || !!needs} onClick={() => apply()}>
             {busy && <Spinner />}
-            {busy ? (prompts ? t('Ждём ответов установщика…') : t('Скачиваем и устанавливаем…')) : nothing ? t('Нечего менять') : t('Применить')}
+            {busy ? t('Скачиваем и устанавливаем…') : needs ? t('Ждём файлы с Nexus…') : nothing ? t('Нечего менять') : t('Применить')}
           </button>
         </>
       }
@@ -125,6 +144,8 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
         </div>
       )}
 
+      {needs && <NexusChecklist planId={plan.id} needs={needs} onNeeds={setNeeds} onReady={() => void apply()} />}
+
       {live.length > 0 && (
         <div className="card">
           {live.map((d) => (
@@ -144,16 +165,8 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
       {plan.install.length > 0 && <Section title={t("Будет установлено")} items={plan.install} titles={titles} />}
       {plan.update.length > 0 && <Section title={t("Будет обновлено")} items={plan.update} titles={titles} />}
       {nothing && <p className="muted">{t('Всё уже установлено в нужных версиях — профиль не изменится.')}</p>}
-      {prompts && (
-        <FomodWizard
-          prompts={prompts}
-          onCancel={() => setPrompts(null)}
-          onDone={(choices) => {
-            setPrompts(null);
-            void apply(choices);
-          }}
-        />
-      )}
+      {prompts && prompts.fomod.length > 0 && !answers && !busy && <FomodWizard prompts={prompts.fomod} onCancel={cancelPrompts} onDone={(choices) => void apply(choices)} />}
+      {prompts && prompts.layout.length > 0 && answers && !busy && <LayoutWizard prompts={prompts.layout} onCancel={cancelPrompts} onDone={(layouts) => void apply(answers, layouts)} />}
     </Modal>
   );
 }

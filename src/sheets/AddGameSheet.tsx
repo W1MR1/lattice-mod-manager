@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, Radar } from 'lucide-react';
-import type { DetectedGame, ManagedGame } from '../../shared/types';
+import { FolderOpen, Radar, Search } from 'lucide-react';
+import type { DetectedGame, GameDef, ManagedGame } from '../../shared/types';
 import { api, bridge } from '../api';
-import { LOADER_LABEL, SOURCE_LABEL } from '../format';
+import { LOADER_LABEL, plural, SOURCE_LABEL } from '../format';
 import { useUI } from '../store';
 import { Modal, Spinner } from '../components/ui';
 import { GameIcon } from '../components/Icons';
@@ -62,6 +62,7 @@ export function AddGameSheet({ onClose }: { onClose: () => void }) {
   const [path, setPath] = useState('');
   const [ctx, setCtx] = useState<{ gameVersion?: string; loader?: string }>({ loader: 'fabric' });
   const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState('');
 
   const pickCopy = (c: DetectedGame) => {
     setPath(c.path);
@@ -83,6 +84,16 @@ export function AddGameSheet({ onClose }: { onClose: () => void }) {
 
   const def = defs.find((d) => d.id === defId);
   const copies = (detected ?? []).filter((d) => d.defId === defId);
+  // Hundreds of games: the installed ones and the ones Lattice knows best are on screen,
+  // the rest of Thunderstore's list comes up when it is searched.
+  const installed = new Set((detected ?? []).map((d) => d.defId));
+  const needle = q.trim().toLowerCase();
+  const fits = (d: GameDef) => d.name.toLowerCase().includes(needle) || d.id.includes(needle) || (d.aliases ?? []).some((a) => a.toLowerCase().includes(needle));
+  const listed = defs
+    .filter((d) => (needle ? fits(d) : !d.catalog || installed.has(d.id) || d.id === defId))
+    .sort((a, b) => Number(installed.has(b.id)) - Number(installed.has(a.id)) || Number(!!a.catalog) - Number(!!b.catalog));
+  const shown = listed.slice(0, 48);
+  const hiddenCount = needle ? listed.length - shown.length : defs.filter((d) => d.catalog).length - shown.filter((d) => d.catalog).length;
   const pick = (id: string) => {
     setDefId(id);
     const first = detected?.find((d) => d.defId === id);
@@ -125,8 +136,12 @@ export function AddGameSheet({ onClose }: { onClose: () => void }) {
         </>
       }
     >
+      <div className="search">
+        <Search size={15} />
+        <input className="input" autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Найти игру по названию')} aria-label={t('Найти игру по названию')} />
+      </div>
       <div className="option-list">
-        {defs.map((d) => {
+        {shown.map((d) => {
           const n = detected?.filter((x) => x.defId === d.id).length ?? 0;
           return (
             <button key={d.id} className="option" aria-pressed={defId === d.id} onClick={() => pick(d.id)}>
@@ -147,6 +162,12 @@ export function AddGameSheet({ onClose }: { onClose: () => void }) {
           );
         })}
       </div>
+      {shown.length === 0 && <span className="muted">{t('Такой игры в списке нет. Lattice ставит моды для Minecraft, Skyrim SE, Fallout 4, Cyberpunk 2077, Stardew Valley и игр на BepInEx из каталога Thunderstore.')}</span>}
+      {hiddenCount > 0 && (
+        <span className="faint" style={{ fontSize: 'var(--fs-sm)' }}>
+          {needle ? t('Показаны первые {0}. Уточните название.', shown.length) : t('И ещё {0} на BepInEx из каталога Thunderstore — начните вводить название.', plural(hiddenCount, 'игра', 'игры', 'игр'))}
+        </span>
+      )}
       {def && (
         <>
           {copies.length > 0 && (

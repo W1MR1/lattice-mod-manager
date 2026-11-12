@@ -68,13 +68,14 @@ export function ModIcon({ url, title, size }: { url?: string; title: string; siz
   );
 }
 
-/** 0–100 ring; colour by threshold, and the number is always printed. */
-export function HealthRing({ score, size = 32 }: { score: number; size?: number }) {
+/** 0–100 ring; colour by threshold, and the number is always printed. No score yet (null): an empty ring, not a green one. */
+export function HealthRing({ score: known, size = 32 }: { score: number | null; size?: number }) {
+  const score = known ?? 0;
   const r = (size - 6) / 2;
   const c = 2 * Math.PI * r;
   const tone = score >= 90 ? 'var(--ok)' : score >= 60 ? 'var(--warn)' : 'var(--err)';
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={t('Совместимость {0} из 100', score)}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={known === null ? t('Проверяем сборку…') : t('Совместимость {0} из 100', score)}>
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg-3)" strokeWidth={4} />
       <circle
         cx={size / 2}
@@ -89,7 +90,7 @@ export function HealthRing({ score, size = 32 }: { score: number; size?: number 
         style={{ transition: 'stroke-dasharray var(--dur) var(--ease)' }}
       />
       <text x="50%" y="50%" dominantBaseline="central" textAnchor="middle" fontSize={size * 0.32} fontWeight={800} fill="var(--text-1)" fontFamily="var(--font-mono)">
-        {score}
+        {known === null ? '…' : score}
       </text>
     </svg>
   );
@@ -141,7 +142,7 @@ export function Stepper({ value, onChange, min, max, step = 1, suffix }: { value
   );
 }
 
-export function Modal({ title, sub, onClose, children, foot, size }: { title: ReactNode; sub?: ReactNode; onClose: () => void; children: ReactNode; foot?: ReactNode; size?: 'sm' }) {
+export function Modal({ title, sub, onClose, children, foot, size }: { title: ReactNode; sub?: ReactNode; onClose: () => void; children: ReactNode; foot?: ReactNode; size?: 'sm' | 'lg' }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;

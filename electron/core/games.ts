@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import type { GameDef } from '../../shared/types';
 import { tk } from '../../shared/i18n';
+import catalog from './thunderstore-games.json';
 
 export const GAME_DEFS: GameDef[] = [
   {
@@ -155,6 +156,49 @@ export const GAME_DEFS: GameDef[] = [
     github: { keywords: 'stardew' },
   },
 ];
+
+// Every other BepInEx game Thunderstore lists, with the facts r2modman itself
+// works from (scripts/thunderstore-games.mjs). A game written by hand above wins.
+{
+  const known = new Set(GAME_DEFS.flatMap((d) => [d.id, d.thunderstoreCommunity ?? '']));
+  const added = new Set<string>();
+  const hueOf = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+  const shortOf = (name: string) => {
+    const words = name.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    return ((words.length > 1 ? words[0][0] + words[1][0] : name.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2)) || '?').toUpperCase();
+  };
+  for (const g of catalog.games as { id: string; name: string; community: string; steam: string; folder: string; exe: string[]; also?: string[] }[]) {
+    if (known.has(g.id) || known.has(g.community) || added.has(g.id)) continue;
+    added.add(g.id);
+    GAME_DEFS.push({
+      id: g.id,
+      name: g.name,
+      short: shortOf(g.name),
+      hue: hueOf(g.id),
+      kind: 'bepinex',
+      sources: ['thunderstore', 'local'],
+      thunderstoreCommunity: g.community,
+      steamAppId: g.steam,
+      steamFolder: g.folder,
+      deployDir: '',
+      exe: g.exe,
+      aliases: g.also,
+      catalog: true,
+    });
+  }
+}
+
+/** Thunderstore packages that are the BepInEx loader itself (lower-case ids "owner-name"). */
+export const BEPINEX_PACKS = new Set<string>(catalog.packs);
+/**
+ * Packages every Thunderstore community lists that are not mods: other mod
+ * managers and broken uploads. r2modman hides the same ones; installed as a
+ * mod, a manager's own program would land among the game's plugins.
+ */
+const NOT_MODS = new Set<string>(catalog.notMods);
+export const isThunderstoreMod = (projectId: string) => !NOT_MODS.has(projectId.toLowerCase());
+/** Is this Thunderstore package the mod loader rather than a mod? */
+export const isBepInExPack = (projectId: string) => /bepinexpack/i.test(projectId) || BEPINEX_PACKS.has(projectId.toLowerCase());
 
 export const gameDef = (id: string) => GAME_DEFS.find((g) => g.id === id);
 

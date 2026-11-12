@@ -4,6 +4,9 @@ import { useActive, useUI } from './store';
 import { api, bridge } from './api';
 import { Header, Rail, StatusBar, Tabs } from './components/Shell';
 import { Mods } from './screens/Mods';
+import { Home } from './screens/Home';
+import { CommandPalette } from './components/CommandPalette';
+import { JournalSheet } from './sheets/JournalSheet';
 import { Discover } from './screens/Discover';
 import { Graph } from './screens/Graph';
 import { Collections } from './screens/Collections';
@@ -14,6 +17,8 @@ import { Welcome } from './screens/Welcome';
 import { PlanSheet } from './sheets/PlanSheet';
 import { AddGameSheet } from './sheets/AddGameSheet';
 import { HealthSheet, OfflineBanner, UpdateSheet } from './sheets/StartupSheets';
+import { LayoutPicker } from './sheets/LayoutPicker';
+import type { LayoutPrompt } from '../shared/types';
 import { Spinner } from './components/ui';
 import { t } from '../shared/i18n';
 
@@ -51,6 +56,44 @@ function Toasts() {
   );
 }
 
+/** The picker of archive variants for an installed mod, opened from anywhere (a fix button, the mod card). */
+function RelayoutHost() {
+  const key = useUI((s) => s.relayout);
+  const { profile } = useActive();
+  const [prompt, setPrompt] = useState<LayoutPrompt | null>(null);
+  useEffect(() => {
+    setPrompt(null);
+    if (!key || !profile) return;
+    let live = true;
+    void useUI
+      .getState()
+      .run(() => api.layoutPrompt(profile.id, key))
+      .then((p) => {
+        if (!live) return;
+        if (p) setPrompt(p);
+        else {
+          useUI.setState({ relayout: null });
+          if (p === null) useUI.getState().toast('info', t('У этого мода нет архива с вариантами: он установлен одним способом.'));
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [key, profile?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!key || !profile || !prompt) return null;
+  const close = () => useUI.setState({ relayout: null });
+  return (
+    <LayoutPicker
+      prompt={prompt}
+      onCancel={close}
+      onDone={(choice) => {
+        close();
+        void useUI.getState().run(() => api.reinstallWithLayout(profile.id, key, choice));
+      }}
+    />
+  );
+}
+
 export function App() {
   const ready = useUI((s) => s.ready);
   const route = useUI((s) => s.route);
@@ -58,6 +101,8 @@ export function App() {
   const health = useUI((s) => s.health);
   const update = useUI((s) => s.update);
   const lang = useUI((s) => s.state?.settings.language);
+  const paletteOpen = useUI((s) => s.paletteOpen);
+  const journalOpen = useUI((s) => s.journalOpen);
   const setAddGame = useUI((s) => s.setAddGame);
   const init = useUI((s) => s.init);
   const { game, profile } = useActive();
@@ -67,20 +112,23 @@ export function App() {
     void init();
   }, [init]);
 
-  // Ctrl+F: the search field of the screen; Ctrl+1…6: the tabs
+  // Ctrl+K: commands; Ctrl+F: the search field of the screen; Ctrl+1…7: the tabs
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-      if (e.key.toLowerCase() === 'f') {
+      if (e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        useUI.setState((s) => ({ paletteOpen: !s.paletteOpen }));
+      } else if (e.key.toLowerCase() === 'f') {
         const el = document.querySelector<HTMLInputElement>('.search input');
         if (el) {
           e.preventDefault();
           el.focus();
           el.select();
         }
-      } else if (/^[1-6]$/.test(e.key) && useUI.getState().state?.games.length) {
+      } else if (/^[1-7]$/.test(e.key) && useUI.getState().state?.games.length) {
         e.preventDefault();
-        useUI.getState().go((['mods', 'discover', 'graph', 'collections', 'downloads', 'snapshots'] as const)[Number(e.key) - 1]);
+        useUI.getState().go((['home', 'mods', 'discover', 'graph', 'collections', 'downloads', 'snapshots'] as const)[Number(e.key) - 1]);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -117,6 +165,8 @@ export function App() {
     if (route === 'downloads') return <Downloads />;
     if (!game) return <Welcome />;
     switch (route) {
+      case 'mods':
+        return <Mods />;
       case 'discover':
         return <Discover />;
       case 'graph':
@@ -126,7 +176,7 @@ export function App() {
       case 'snapshots':
         return <Snapshots />;
       default:
-        return <Mods />;
+        return <Home />;
     }
   };
 
@@ -161,6 +211,9 @@ export function App() {
         <StatusBar />
       </main>
       <PlanSheet />
+      <RelayoutHost />
+      {paletteOpen && <CommandPalette onClose={() => useUI.setState({ paletteOpen: false })} />}
+      {journalOpen && <JournalSheet onClose={() => useUI.setState({ journalOpen: false })} />}
       {addGameOpen && <AddGameSheet onClose={() => setAddGame(false)} />}
       {health && <HealthSheet problems={health} onClose={() => useUI.setState({ health: null })} />}
       {update && update.state !== 'offline' && !health && <UpdateSheet ev={update} onClose={() => useUI.setState({ update: null })} />}

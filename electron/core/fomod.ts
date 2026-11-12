@@ -102,7 +102,7 @@ function plugin(n: unknown): FomodPlugin {
   return {
     name: attr(node, 'name'),
     description: text(node.description).trim(),
-    image: attr(node.image, 'path') || undefined,
+    image: attr(node.image, 'path').replace(/\\/g, '/') || undefined,
     files: files(node.files),
     flags: arr((node.conditionFlags as Node | undefined)?.flag).map((f) => ({ name: attr(f, 'name'), value: text(f) })),
     defaultType: pluginTypeOf(dep ? attr(dep.defaultType, 'name') : attr(td.type, 'name')),
@@ -143,6 +143,7 @@ export function parseFomod(xml: string, root: string): FomodConfig {
   const cond = (config.conditionalFileInstalls ?? {}) as Node;
   return {
     moduleName: text(config.moduleName).trim() || t('Установщик'),
+    image: attr(config.moduleImage, 'path').replace(/\\/g, '/') || undefined,
     root,
     required: files(config.requiredInstallFiles),
     steps,

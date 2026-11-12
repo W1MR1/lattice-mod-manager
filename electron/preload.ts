@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
-const EVENTS = new Set(['state', 'downloads', 'toast', 'deployed', 'plan', 'update']);
+const EVENTS = new Set(['state', 'downloads', 'toast', 'deployed', 'plan', 'update', 'nexus']);
 
 contextBridge.exposeInMainWorld('lattice', {
   call: (method: string, ...args: unknown[]) => ipcRenderer.invoke('lattice:call', method, args),

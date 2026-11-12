@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CircleCheck, CircleX, Compass, Download, History, Info, Layers, Library, Network, Play, Plus, RefreshCw, Settings, WifiOff, Zap } from 'lucide-react';
+import { CircleCheck, CircleX, ClipboardList, Command, Compass, Download, History, Home as HomeIcon, Info, Layers, Library, Network, Play, Plus, RefreshCw, Settings, WifiOff, Zap } from 'lucide-react';
 import { api } from '../api';
 import { ago, bytes, LOADER_LABEL, plural, speed } from '../format';
 import { useActive, useUI, type Route } from '../store';
@@ -116,8 +116,11 @@ export function Header() {
         )}
       </div>
       <div className="drag-fill" />
+      <button className="btn ghost sm palette-open" title={t('Быстрый переход к моду, экрану или действию')} onClick={() => useUI.setState({ paletteOpen: true })}>
+        <Command size={14} /> {t('Команды')} <kbd>Ctrl K</kbd>
+      </button>
       {report && (
-        <button className="health" onClick={() => go('graph')} title={t("Открыть граф совместимости")}>
+        <button className="health" onClick={() => go('home')} title={t('Состояние сборки: что найдено и как исправить')}>
           <HealthRing score={report.score} />
           <span className="health-text">
             <b>{report.errors ? plural(report.errors, 'ошибка', 'ошибки', 'ошибок') : report.warnings ? plural(report.warnings, 'предупреждение', 'предупреждения', 'предупреждений') : t('Сборка цела')}</b>
@@ -161,6 +164,7 @@ export function Header() {
 }
 
 const TABS: { id: Route; label: string; icon: typeof Layers }[] = [
+  { id: 'home', label: tk('Главная'), icon: HomeIcon },
   { id: 'mods', label: tk('Моды'), icon: Layers },
   { id: 'discover', label: tk('Обзор'), icon: Compass },
   { id: 'graph', label: tk('Граф связей'), icon: Network },
@@ -173,12 +177,13 @@ export function Tabs() {
   const route = useUI((s) => s.route);
   const go = useUI((s) => s.go);
   const report = useUI((s) => s.report);
-  const { profile, state } = useActive();
+  const { profile, state, def } = useActive();
   const activeDl = useUI((s) => s.downloads.filter((d) => ['downloading', 'probing', 'queued'].includes(d.state)).length);
   const counts: Partial<Record<Route, { n: number; err?: boolean }>> = {
+    home: report ? { n: report.errors + report.warnings, err: report.errors > 0 } : undefined,
     mods: { n: profile ? Object.keys(profile.mods).length : 0 },
-    graph: report ? { n: report.errors + report.warnings, err: report.errors > 0 } : undefined,
-    collections: { n: state?.collections.length ?? 0 },
+    // only this game's: collections of other games are not on that screen
+    collections: { n: state?.collections.filter((c) => c.game.defId === def?.id).length ?? 0 },
     downloads: { n: activeDl },
     snapshots: { n: state?.snapshots.filter((s) => s.profileId === profile?.id).length ?? 0 },
   };
@@ -220,6 +225,7 @@ export function StatusBar() {
   const total = downloads.reduce((a, d) => a + d.speed, 0);
   const conns = downloads.reduce((a, d) => a + d.connections, 0);
   const live = downloads.filter((d) => d.state === 'downloading').length;
+  const unread = useUI((s) => s.unreadErrors);
   return (
     <footer className="statusbar">
       <span className="row" title={t("Суммарная скорость. Ограничений скорости нет.")}>
@@ -242,6 +248,10 @@ export function StatusBar() {
         </span>
       )}
       <span className="grow" />
+      <button className="statusbar-btn" title={t('Что Lattice делал и что пошло не так; отсюда же отчёт о проблеме')} onClick={() => useUI.setState({ journalOpen: true, unreadErrors: 0 })}>
+        <ClipboardList size={13} /> {t('Журнал')}
+        {unread > 0 && <span className="tab-count err">{unread}</span>}
+      </button>
       <span className="row faint">
         <Info size={13} />
         {t('кэш загрузок за сессию: {0}', bytes(downloads.filter((d) => d.state === 'done').reduce((a, d) => a + d.size, 0)))}

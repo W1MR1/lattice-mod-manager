@@ -14,7 +14,7 @@ import type {
   Profile,
 } from '../../shared/types';
 import { keyOf } from '../../shared/types';
-import { fitsContext } from '../../shared/context';
+import { fitsContext, loaderFits, loaderLabel } from '../../shared/context';
 import { compareVersions, satisfies } from '../../shared/versions';
 import { t } from '../../shared/i18n';
 
@@ -22,6 +22,9 @@ export interface ProjectMeta {
   title: string;
   iconUrl?: string;
   author?: string;
+  /** loaders and game versions the project is released for, when the source lists them */
+  loaders?: string[];
+  gameVersions?: string[];
 }
 
 export interface VersionProvider {
@@ -176,6 +179,27 @@ export async function resolvePlan(input: ResolveInput, provider: VersionProvider
         .map((c) => `${c.from === 'user' ? t('вы') : names.get(c.from) ?? c.from}: ${c.range}`)
         .join('; ');
       const total = all.length;
+      // A dependency that is not released for this loader at all cannot be what the mod needs
+      // here: files built for several loaders list the needs of each. It is left out, not an error.
+      if (!req && total > 0 && ctx.loader && !all.some((v) => loaderFits(v.loaders, ctx.loader))) {
+        issue({
+          severity: 'info',
+          code: 'catalog-dep',
+          subject: key,
+          related: cons.map((c) => c.from).filter((f) => f !== 'user'),
+          message: t(
+            '«{0}» есть только для других загрузчиков, не для {1}: пропущен. В каталоге на него ссылается {2} — так бывает, когда один файл мода собран для нескольких загрузчиков.',
+            key,
+            loaderLabel(ctx.loader),
+            cons
+              .filter((c) => c.from !== 'user' && !c.from.startsWith('collection:'))
+              .map((c) => `«${c.from}»`)
+              .join(', ') || '—',
+          ),
+        });
+        constraints.delete(key);
+        continue;
+      }
       issue({
         severity: 'error',
         code: 'unresolvable',
@@ -266,7 +290,9 @@ export async function resolvePlan(input: ResolveInput, provider: VersionProvider
   }
 
   const fresh = [...selected].filter(([, p]) => !p.installed || p.installed.versionId !== p.version.versionId);
-  const meta = await provider.meta(fresh.map(([, p]) => p.version.ref)).catch(() => new Map<string, ProjectMeta>());
+  // names for what is installed and for what the issues talk about
+  const mentioned = [...new Set(issues.flatMap((i) => [i.subject, ...i.related]))].filter((k) => !names.has(k) && !k.startsWith('collection:') && k.includes(':') && !selected.has(k));
+  const meta = await provider.meta([...fresh.map(([, p]) => p.version.ref), ...mentioned.map(refFromKey)]).catch(() => new Map<string, ProjectMeta>());
   for (const [k, m] of meta) names.set(k, m.title);
 
   const requiredByOf = (k: string) =>
