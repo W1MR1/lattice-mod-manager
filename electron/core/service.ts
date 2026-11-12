@@ -455,7 +455,9 @@ export class Service extends EventEmitter {
       if (def.id === 'stardewvalley') names = (await smapiNames(s)).map((id) => ({ id, loader: 'SMAPI' }));
       else if (def.id === 'cyberpunk2077') {
         names = [
+          // RED4ext names a plugin by its own name when it loads and by its file when it cannot be loaded
           ...sub(/^red4ext\/plugins\/([^/]+)\/[^/]+\.dll$/i, 'RED4ext', s.files),
+          ...sub(/^red4ext\/plugins\/(?:[^/]+\/)?([^/]+)\.dll$/i, 'RED4ext', s.files),
           ...sub(/^bin\/x64\/plugins\/cyber_engine_tweaks\/mods\/([^/]+)\/init\.lua$/i, 'Cyber Engine Tweaks', s.files),
           ...sub(/^r6\/scripts\/([^/]+)\//i, undefined, s.files),
         ];

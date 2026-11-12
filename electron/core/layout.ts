@@ -266,6 +266,60 @@ function manualPlan(names: string[], mod: string, choice: LayoutChoice, dests: L
 
 const manual = (c?: LayoutChoice): c is LayoutChoice & { dest: string } => c?.dest !== undefined;
 
+/**
+ * Two files of an archive that would land in the same place are two versions of
+ * one thing ("4K/hair.archive" and "2K/hair.archive"): the folders they come from
+ * are variants, and only a person knows which one is wanted. Turns such a plan
+ * into a question; without an answer the suggested variant is what gets installed.
+ */
+function askAboutClashes(plan: LayoutPlan, names: string[], dests: LayoutDest[]): boolean {
+  const byTarget = new Map<string, string[]>();
+  for (const [entry, target] of plan.map) byTarget.set(target.toLowerCase(), [...(byTarget.get(target.toLowerCase()) ?? []), entry]);
+  const clashing = [...byTarget.values()].filter((e) => e.length > 1).flat();
+  if (clashing.length === 0) return false;
+  // the folder all clashing files share; the folder below it that each one lies in is its variant
+  const dirs = clashing.map((e) => e.split('/').slice(0, -1));
+  let depth = 0;
+  while (dirs.every((d) => d.length > depth && d[depth] === dirs[0][depth])) depth++;
+  const shared = depth ? `${dirs[0].slice(0, depth).join('/')}/` : '';
+  const variantOf = (entry: string): string | null => {
+    if (!entry.startsWith(shared)) return null;
+    const rest = entry.slice(shared.length);
+    const i = rest.indexOf('/');
+    if (i >= 0) return `${shared}${rest.slice(0, i)}/`;
+    return shared ? null : TOP_FILES;
+  };
+  const rivals = [...new Set(clashing.map(variantOf))];
+  // a clash inside one folder, or a clashing file that lies in no folder of its own: no clean question to ask
+  if (rivals.length < 2 || rivals.includes(null)) return false;
+  // everything else that is installed stays on offer, ticked: an answer installs exactly what is ticked
+  const others = new Set<string>();
+  for (const entry of plan.map.keys()) {
+    if (rivals.some((r) => under(entry, r!))) continue;
+    const top = entry.includes('/') ? `${entry.slice(0, entry.indexOf('/'))}/` : TOP_FILES;
+    // a file beside the variants, inside the folder that holds them, cannot be offered apart from them
+    if (top !== TOP_FILES && shared.startsWith(top)) return false;
+    others.add(top);
+  }
+  const pick = suggest(rivals as string[]);
+  plan.ask = { reason: 'variants', options: [...[...others].map((o) => optionOf(o, names, true)), ...(rivals as string[]).map((r) => optionOf(r, names, pick.has(r)))], dests };
+  for (const entry of [...plan.map.keys()]) {
+    if ((rivals as string[]).some((r) => !pick.has(r) && under(entry, r))) {
+      plan.map.delete(entry);
+      plan.unplaced = plan.unplaced.filter((u) => u !== entry);
+    }
+  }
+  plan.how = 'arranged';
+  return true;
+}
+
+/** Several ticked parts that put a file in the same place: the part ticked later wins, as the picker says. */
+function laterWins(plan: LayoutPlan): void {
+  const last = new Map<string, string>();
+  for (const [entry, target] of plan.map) last.set(target.toLowerCase(), entry);
+  for (const [entry, target] of [...plan.map]) if (last.get(target.toLowerCase()) !== entry) plan.map.delete(entry);
+}
+
 // ---------- games with a model: Cyberpunk 2077, Skyrim SE, Fallout 4
 
 /** Lays out one content root into `plan`; tells whether anything had to be moved. */
@@ -350,6 +404,7 @@ function modelPlan(model: Model, def: GameDef, names: string[], mod: string, cho
       plan.how = 'unknown';
       return plan;
     }
+    if (askAboutClashes(plan, names, dests)) return plan;
     plan.how = arranged ? 'arranged' : 'as-is';
     if (arranged) plan.notes.push(t('Файлы разложены по папкам игры: {0}', describe(plan)));
     return plan;
@@ -362,6 +417,8 @@ function modelPlan(model: Model, def: GameDef, names: string[], mod: string, cho
     plan.extras.push(...inner.map((p) => optionOf(p, names, false)));
     if (root && root !== TOP_FILES) plan.notes.push(t('Снята папка-обёртка «{0}»', root.replace(/\/$/, '')));
   }
+  if (chosen?.length) laterWins(plan);
+  else if (askAboutClashes(plan, names, dests)) return plan;
   // variants the user left out stay available
   if (chosen?.length) plan.extras.push(...roots.filter((r) => !chosen.includes(r)).map((p) => optionOf(p, names, false)));
   if (arranged && plan.notes.length === 0) plan.notes.push(t('Файлы разложены по папкам игры: {0}', describe(plan)));

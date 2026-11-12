@@ -221,3 +221,31 @@ describe('Minecraft: a zip is told by what is inside it', () => {
     expect(await exists(path.join(inst, 'resourcepacks', 'release.zip'))).toBe(false);
   });
 });
+
+describe('Cyberpunk 2077: two variants packed as loose files with the same names', () => {
+  it('asks which one, and the game folder gets the one picked — not whichever came last in the archive', async () => {
+    const { game, svc, profileId, mods } = await cyberpunk();
+    const file = await zip('Hair Pack.zip', { '4K/hair.archive': 'four', '2K/hair.archive': 'two', 'readme.txt': 'r' });
+    const plan = await svc.importLocal(profileId, [file]);
+    const asked = await svc.inspectPlan(plan.id);
+    expect(asked.layout).toHaveLength(1);
+    expect(asked.layout[0]).toMatchObject({ reason: 'variants' });
+    expect(asked.layout[0].options.map((o) => o.path).sort()).toEqual(['2K/', '4K/']);
+    await svc.applyPlan(plan.id, false, {}, { [asked.layout[0].key]: { roots: ['4K/'] } });
+    expect(await fs.readFile(path.join(game, 'archive', 'pc', 'mod', 'hair.archive'), 'utf8')).toBe('four');
+    // the other variant stays one click away
+    const m = mods()[0];
+    expect(m.layout).toEqual({ roots: ['4K/'] });
+    await svc.reinstallWithLayout(profileId, m.key, { roots: ['2K/'] });
+    expect(await fs.readFile(path.join(game, 'archive', 'pc', 'mod', 'hair.archive'), 'utf8')).toBe('two');
+  });
+
+  it('installed without anyone to ask, it takes one variant and says so', async () => {
+    const { game, svc, profileId, toasts } = await cyberpunk();
+    const file = await zip('Hair Pack.zip', { '4K/hair.archive': 'four', '2K/hair.archive': 'two' });
+    const plan = await svc.importLocal(profileId, [file]);
+    await svc.applyPlan(plan.id);
+    expect(['four', 'two']).toContain(await fs.readFile(path.join(game, 'archive', 'pc', 'mod', 'hair.archive'), 'utf8'));
+    expect(toasts.join('\n')).toMatch(/вариант|variant/i);
+  });
+});

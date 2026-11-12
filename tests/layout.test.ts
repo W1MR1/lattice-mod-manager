@@ -180,3 +180,53 @@ describe('checking a staged mod', () => {
     expect(checkStaged(vh, ['BepInEx/plugins/X.dll', 'winhttp.dll']).broken).toBe(false);
   });
 });
+
+describe('variants packed as loose files', () => {
+  it('asks when two folders would put a file in the same place, instead of letting one overwrite the other', () => {
+    const { plan, files } = placed(cp, ['4K/hair.archive', '2K/hair.archive', 'readme.txt']);
+    expect(plan.ask?.reason).toBe('variants');
+    expect(plan.ask!.options.map((o) => o.path).sort()).toEqual(['2K/', '4K/']);
+    // without an answer exactly one of them is installed
+    expect(Object.values(files)).toEqual(['archive/pc/mod/hair.archive']);
+    expect(plan.ask!.options.filter((o) => o.suggested)).toHaveLength(1);
+  });
+
+  it('installs the variant that was picked', () => {
+    const names = ['4K/hair.archive', '2K/hair.archive'];
+    expect(placed(cp, names, 'Hair', { roots: ['4K/'] }).files).toEqual({ '4K/hair.archive': 'archive/pc/mod/hair.archive' });
+    expect(placed(cp, names, 'Hair', { roots: ['2K/'] }).files).toEqual({ '2K/hair.archive': 'archive/pc/mod/hair.archive' });
+  });
+
+  it('when both are ticked the later one wins, as the picker says', () => {
+    const both = placed(cp, ['4K/hair.archive', '2K/hair.archive'], 'Hair', { roots: ['4K/', '2K/'] });
+    expect(both.files).toEqual({ '2K/hair.archive': 'archive/pc/mod/hair.archive' });
+    expect(both.plan.ask).toBeUndefined();
+  });
+
+  it('keeps what does not clash on offer and ticked', () => {
+    const { plan, files } = placed(cp, ['Main/body.archive', 'Colors/Red/skin.archive', 'Colors/Blue/skin.archive', 'extra.archive']);
+    expect(plan.ask!.options.map((o) => [o.path, o.suggested])).toEqual([
+      ['Main/', true],
+      [TOP_FILES, true],
+      // of the two that clash, the first in the archive is the one suggested
+      ['Colors/Red/', true],
+      ['Colors/Blue/', false],
+    ]);
+    expect(Object.keys(files).sort()).toEqual(['Colors/Red/skin.archive', 'Main/body.archive', 'extra.archive']);
+    // the answer installs exactly what is ticked
+    const picked = placed(cp, ['Main/body.archive', 'Colors/Red/skin.archive', 'Colors/Blue/skin.archive', 'extra.archive'], 'Skin', { roots: ['Main/', TOP_FILES, 'Colors/Blue/'] });
+    expect(Object.keys(picked.files).sort()).toEqual(['Colors/Blue/skin.archive', 'Main/body.archive', 'extra.archive']);
+  });
+
+  it('does not ask about loose files that do not clash', () => {
+    const { plan, files } = placed(cp, ['Hair/hair.archive', 'Eyes/eyes.archive']);
+    expect(plan.ask).toBeUndefined();
+    expect(Object.values(files).sort()).toEqual(['archive/pc/mod/eyes.archive', 'archive/pc/mod/hair.archive']);
+  });
+
+  it('a wrapper around the variants does not hide them', () => {
+    const { plan } = placed(cp, ['Hair Pack v2/4K/hair.archive', 'Hair Pack v2/2K/hair.archive']);
+    expect(plan.ask!.options.map((o) => o.path).sort()).toEqual(['Hair Pack v2/2K/', 'Hair Pack v2/4K/']);
+    expect(placed(cp, ['Hair Pack v2/4K/hair.archive', 'Hair Pack v2/2K/hair.archive'], 'Hair', { roots: ['Hair Pack v2/4K/'] }).files).toEqual({ 'Hair Pack v2/4K/hair.archive': 'archive/pc/mod/hair.archive' });
+  });
+});

@@ -18,6 +18,8 @@ export interface LogFacts {
   loader: string;
   /** names or ids of what was loaded, lower case */
   loaded: string[];
+  /** what loaded mods carry inside them and the loader loaded along (Fabric's nested jars), lower case */
+  bundled: string[];
   /** what was refused, with the loader's own words */
   failed: { id: string; reason: string }[];
   /** the loader stopped the game altogether */
@@ -26,7 +28,7 @@ export interface LogFacts {
   complete: boolean;
 }
 
-const empty = (loader: string, complete = false): LogFacts => ({ loader, loaded: [], failed: [], complete });
+const empty = (loader: string, complete = false): LogFacts => ({ loader, loaded: [], bundled: [], failed: [], complete });
 const lines = (text: string) => text.split(/\r?\n/);
 
 // ---------- Minecraft
@@ -44,21 +46,28 @@ export function parseFabricLog(text: string): LogFacts | null {
       out.complete = true;
       for (let j = i + 1; j < all.length; j++) {
         const l = all[j];
-        // Fabric: "\t- modid 1.2.3" (bundled mods are indented below with |-- and \--)
+        // Fabric: "\t- modid 1.2.3"
         const f = /^\s*- ([a-z0-9_\-]+) (\S+)/i.exec(l);
+        // what a mod bundles, at any depth, as FabricLoaderImpl.dumpModList0 draws it:
+        // "\t   |-- id 1.0", "\t   \-- id 1.0", "\t   |    |-- id 1.0", "\t        \-- id 1.0".
+        // A bundled mod is loaded too: a newer copy inside another mod replaces a jar of the profile.
+        const n = /^\s*(?:\|\s+)*[|\\]-- ([a-z0-9_\-]+) /i.exec(l);
         // Quilt: a table row "| 12 | Name | modid | 1.2.3 | ..."
         const q = /^\|\s*\d+\s*\|[^|]*\|\s*([a-z0-9_\-]+)\s*\|/i.exec(l);
         if (f) out.loaded.push(f[1].toLowerCase());
+        else if (n) out.bundled.push(n[1].toLowerCase());
         else if (q) out.loaded.push(q[1].toLowerCase());
-        else if (/^\s*(\||\\)--/.test(l) || /^\|[-:| ]+\|?$/.test(l) || /^\|\s*Index/i.test(l)) continue;
+        else if (/^\s*(?:\|\s+)*[|\\]--/.test(l) || /^\|[-:| ]+\|?$/.test(l) || /^\|\s*Index/i.test(l)) continue;
         else if (l.trim() === '') continue;
         else break;
       }
     }
     if (/Incompatible mods? found|Some of your mods are incompatible/i.test(line)) out.fatal = t('Загрузчик остановил игру: моды несовместимы с игрой или друг с другом.');
     // "- Mod 'Indium' (indium) 1.0 requires version 0.5 or later of mod 'Sodium' (sodium), which is missing!"
+    // Only "requires" and "is incompatible with" stop the game; "conflicts with" and "recommends" are
+    // warnings the game starts with (Fabric's own words: "this won't prevent you from starting the game").
     const m = /^\s*- Mod '([^']+)' \(([a-z0-9_\-]+)\) (\S+) (.+)$/i.exec(line);
-    if (m && /requires|is incompatible|conflicts|breaks|recommends/i.test(m[4]) && !/recommends/i.test(m[4])) {
+    if (m && /^(requires|is incompatible with)\b/i.test(m[4])) {
       out.failed.push({ id: m[2].toLowerCase(), reason: `${m[1]} ${m[3]} ${m[4]}`.replace(/\s+/g, ' ').trim() });
     }
   }
@@ -97,38 +106,43 @@ export function parseBepInExLog(text: string): LogFacts | null {
     const ok = /\]\s*Loading \[(.+?) [^\s\]]+\]\s*$/.exec(line);
     if (ok) out.loaded.push(ok[1].toLowerCase());
     const bad = /Could not load \[(.+?) [^\s\]]+\] because (.+)$/.exec(line) ?? /Skipping \[(.+?) [^\s\]]+\] because (.+)$/.exec(line);
-    if (bad && !/a newer version exists/i.test(bad[2])) out.failed.push({ id: bad[1].toLowerCase(), reason: bad[2].trim() });
+    // skipped on purpose is not a failure: a newer copy of the same plugin is loaded instead,
+    // or the plugin is written for another program of the game (its dedicated server)
+    if (bad && !/a newer version exists|process filters/i.test(bad[2])) out.failed.push({ id: bad[1].toLowerCase(), reason: bad[2].trim() });
   }
   return out;
 }
 
 // ---------- Stardew Valley (SMAPI)
 
+/** The texts are those of SMAPI's LogManager: section headers are indented, lists more so. */
 export function parseSmapiLog(text: string): LogFacts | null {
   if (!/SMAPI/.test(text.slice(0, 4000))) return null;
   const out = empty('SMAPI');
-  const body = (l: string) => l.replace(/^\[[^\]]*\]\s?/, '');
+  // "[12:00:00 INFO  SMAPI] text": the text keeps its own indent
+  const body = (l: string) => l.replace(/^\[[^\]]*\] ?/, '');
   let mode: 'loaded' | 'skipped' | null = null;
   for (const raw of lines(text)) {
     const l = body(raw);
-    if (/^Loaded \d+ (mods|content packs):/.test(l)) {
+    if (/^\s*Loaded \d+ (mods|content packs)[:.]/.test(l)) {
       mode = 'loaded';
       out.complete = true;
       continue;
     }
-    if (/^Skipped mods/.test(l)) {
+    if (/^\s*Skipped mods\s*$/.test(l)) {
       mode = 'skipped';
       continue;
     }
     if (mode === 'loaded') {
-      const m = /^\s{2,}(.+?) (\d[^\s]*) by /.exec(l);
+      // "   Name 1.2.3 by Author | description": the author and the description may be missing
+      const m = /^\s{2,}(.+?) (\d[^\s|]*)(?: by .*| \|.*|\s*)$/.exec(l);
       if (m) out.loaded.push(m[1].toLowerCase());
-      else if (l.trim() === '') mode = null;
-      else if (!/^\s/.test(l)) mode = null;
+      else if (l.trim() === '' || !/^\s/.test(l)) mode = null;
     } else if (mode === 'skipped') {
-      const m = /^\s+- (.+?) (\d[^\s]*) because (.+)$/.exec(l) ?? /^\s+- (.+?)() because (.+)$/.exec(l);
+      const m = /^\s+- (.+?) (\d[^\s]*)(?: \(ID: [^)]*\))? because (.+)$/.exec(l) ?? /^\s+- (.+?)() because (.+)$/.exec(l);
       if (m) out.failed.push({ id: m[1].toLowerCase(), reason: m[3].trim() });
-      else if (/^(Found|Loaded|Launching|Detected)/.test(l)) mode = null;
+      // the next section ("   Changed save serializer", "Launching mods...") ends the list
+      else if (/^\s{0,4}[A-Za-z]/.test(l) && !/^\s*These mods/.test(l)) mode = null;
     }
   }
   return out;
@@ -136,31 +150,61 @@ export function parseSmapiLog(text: string): LogFacts | null {
 
 // ---------- Cyberpunk 2077
 
+/** The texts are those of RED4ext's PluginSystem.cpp. */
 export function parseRed4extLog(text: string): LogFacts | null {
   if (!/RED4ext/i.test(text.slice(0, 4000))) return null;
   const out = empty('RED4ext', true);
+  const fail = (name: string, reason: string) => {
+    const id = name.trim().toLowerCase();
+    if (!out.failed.some((f) => f.id === id)) out.failed.push({ id, reason: reason.trim() });
+  };
   for (const line of lines(text)) {
     const ok = /\]\s*([^\][]+?) \(version: .*\) has been loaded/.exec(line);
     if (ok) out.loaded.push(ok[1].trim().toLowerCase());
-    const dll = /plugin located at '.*[\\/]plugins[\\/]([^\\/']+)[\\/][^\\/']+' could not be loaded\.?(.*)$/i.exec(line);
-    if (dll) out.failed.push({ id: dll[1].toLowerCase(), reason: `could not be loaded${dll[2] ? `:${dll[2]}` : ''}`.trim() });
-    const inc = /\]\s*([^\][]+?) \(version: .*?\) is incompatible (.+)$/.exec(line);
-    if (inc) out.failed.push({ id: inc[1].trim().toLowerCase(), reason: `is incompatible ${inc[2]}`.trim() });
+    // the file could not be loaded at all: named by the file, without ".dll"
+    const load = /Could not load plugin '([^']+)'\. Error code: (\d+), msg: '([^']*)'/.exec(line);
+    if (load) fail(load[1], `could not be loaded: ${load[3] || `error ${load[2]}`}`);
+    const located = /plugin located at '.*[\\/]plugins[\\/]([^\\/']+)[\\/][^\\/']+' could not be loaded\.?(.*)$/i.exec(line);
+    if (located) fail(located[1], `could not be loaded${located[2] ? `:${located[2]}` : ''}`);
+    // loaded, asked, and refused: named by the plugin's own name
+    const refused = /\]\s*([^\][]+?) \(version: [^)]*\) (is incompatible with the current patch.*|uses RED4ext\.SDK v\S+ which is not supported by RED4ext v\S+)/.exec(line);
+    if (refused) fail(refused[1], refused[2].replace(/\.$/, ''));
+    const init = /\]\s*([^\][]+?) did not initialize properly, unloading/.exec(line);
+    if (init) fail(init[1], 'did not initialize properly');
+    const api = /'([^']+)' is using an unsupported API version\. API version: (\d+)/.exec(line);
+    if (api) fail(api[1], `is using an unsupported API version (${api[2]})`);
+    const supports = /Could not retrieve 'Supports' function from '([^']+)'/.exec(line);
+    if (supports) fail(supports[1], "could not be asked which game versions it supports ('Supports' is missing)");
   }
   return out;
 }
 
+/**
+ * Cyber Engine Tweaks tells what it did with each mod in scripting.log
+ * (ScriptStore.cpp): "Mod X loaded! ('path')" or "Mod X failed to load! ('path')".
+ * What a mod prints while it runs is not a failure to load: mods log errors and
+ * go on working, so those lines are left alone.
+ */
 export function parseCetLog(text: string): LogFacts | null {
-  if (!/CET version|Cyber Engine Tweaks/i.test(text.slice(0, 4000))) return null;
-  const out = empty('Cyber Engine Tweaks', true);
+  const loaded = new Set<string>();
+  const failed = new Set<string>();
   for (const line of lines(text)) {
-    const ok = /Mod (.+?) loaded! \(/.exec(line);
-    if (ok) out.loaded.push(ok[1].toLowerCase());
-    if (/\[error\]/i.test(line)) {
-      const m = /[\\/]cyber_engine_tweaks[\\/]mods[\\/]([^\\/]+)[\\/]/i.exec(line);
-      if (m && !out.failed.some((f) => f.id === m[1].toLowerCase())) out.failed.push({ id: m[1].toLowerCase(), reason: line.replace(/^\[[^\]]*\]\s*\[error\]\s*/i, '').slice(0, 220) });
+    const ok = /Mod (.+?) loaded! \('/.exec(line);
+    const bad = /Mod (.+?) failed to load! \('/.exec(line);
+    // mods can be reloaded within one run: the last word about a mod counts
+    if (ok) {
+      loaded.add(ok[1].toLowerCase());
+      failed.delete(ok[1].toLowerCase());
+    } else if (bad) {
+      failed.add(bad[1].toLowerCase());
+      loaded.delete(bad[1].toLowerCase());
     }
   }
+  // no list of mods in this file: nothing to tell, and nothing to claim
+  if (loaded.size + failed.size === 0) return null;
+  const out = empty('Cyber Engine Tweaks', true);
+  out.loaded = [...loaded];
+  out.failed = [...failed].map((id) => ({ id, reason: 'failed to load' }));
   return out;
 }
 
@@ -181,18 +225,31 @@ export function parseRedscriptLog(text: string): LogFacts | null {
 
 // ---------- Skyrim SE and Fallout 4 (script extenders)
 
+/** The texts are those of the script extenders' PluginManager.cpp. */
 export function parseSkseLog(text: string): LogFacts | null {
   if (!/(SKSE64|F4SE) runtime|plugin directory/i.test(text.slice(0, 4000))) return null;
   const out = empty(/F4SE/.test(text.slice(0, 400)) ? 'F4SE' : 'SKSE', true);
-  for (const line of lines(text)) {
-    const p = /^plugin (.+?\.dll) \(.*?\) (.+?) \(handle \d+\)/i.exec(line.trim());
+  // a plugin is known by its file: newer builds print the name, older ones the whole path
+  const idOf = (file: string) =>
+    file
+      .split(/[\\/]/)
+      .pop()!
+      .toLowerCase()
+      .replace(/\.dll$/, '');
+  const fail = (id: string, reason: string) => {
+    if (!out.failed.some((f) => f.id === id)) out.failed.push({ id, reason: reason.trim() });
+  };
+  for (const raw of lines(text)) {
+    const line = raw.trim();
+    // "plugin <file> (<data version> <name> <plugin version>) <what happened>[ <code>][ (handle N)]"
+    const p = /^plugin (.+?\.dll) \([0-9A-Fa-f]{8} .*? ?[0-9A-Fa-f]{8}\) (.+?)(?: \(handle \d+\))?$/i.exec(line);
     if (p) {
-      const id = p[1].toLowerCase().replace(/\.dll$/, '');
-      if (/loaded correctly/i.test(p[2])) out.loaded.push(id);
-      else out.failed.push({ id, reason: p[2].trim() });
+      if (/^loaded correctly/i.test(p[2])) out.loaded.push(idOf(p[1]));
+      else fail(idOf(p[1]), p[2].replace(/ \d+$/, ''));
+      continue;
     }
-    const c = /couldn't load plugin .*[\\/]([^\\/]+)\.dll (.*)$/i.exec(line.trim());
-    if (c) out.failed.push({ id: c[1].toLowerCase(), reason: `couldn't load ${c[2]}`.trim() });
+    const c = /couldn't load plugin (.+?\.dll)(.*)$/i.exec(line);
+    if (c) fail(idOf(c[1]), `couldn't load plugin${c[2]}`);
   }
   return out;
 }
@@ -257,7 +314,8 @@ export async function readGameLogs(def: GameDef, gameDir: string, where: { home?
     tries.push({ file: path.join(appData, 'StardewValley', 'ErrorLogs', 'SMAPI-latest.txt'), parse: parseSmapiLog });
   } else if (def.id === 'cyberpunk2077') {
     tries.push({ file: (await newest(path.join(gameDir, 'red4ext', 'logs'), /^red4ext.*\.log$/i)) ?? null, parse: parseRed4extLog });
-    tries.push({ file: path.join(gameDir, 'bin', 'x64', 'plugins', 'cyber_engine_tweaks', 'cyber_engine_tweaks.log'), parse: parseCetLog });
+    // the list of mods is in scripting.log; cyber_engine_tweaks.log is about CET itself
+    tries.push({ file: path.join(gameDir, 'bin', 'x64', 'plugins', 'cyber_engine_tweaks', 'scripting.log'), parse: parseCetLog });
     tries.push({ file: path.join(gameDir, 'r6', 'logs', 'redscript_rCURRENT.log'), parse: parseRedscriptLog });
   } else if (def.id === 'skyrimse' || def.id === 'fallout4') {
     const [folders, name] = def.id === 'skyrimse' ? [['Skyrim Special Edition', 'Skyrim Special Edition GOG', 'Skyrim Special Edition EPIC'], 'skse64.log'] : [['Fallout4'], 'f4se.log'];
@@ -351,8 +409,8 @@ export function logFindings(logs: ReadLog[], subjects: LogSubject[], since: numb
   }
   // mods a loader should have listed and did not
   for (const log of fresh.filter((l) => l.facts.complete)) {
-    const loaded = new Set(log.facts.loaded);
-    const loadedFlat = new Set(log.facts.loaded.map(flat));
+    const loaded = new Set([...log.facts.loaded, ...log.facts.bundled]);
+    const loadedFlat = new Set([...loaded].map(flat));
     const mine = subjects.filter((s) => s.names.some((n) => n.loader === log.facts.loader));
     const missing = mine.filter((s) => !reported.has(s.key) && !s.names.some((n) => n.loader === log.facts.loader && (loaded.has(n.id) || loadedFlat.has(flat(n.id)))));
     if (missing.length === 0) continue;

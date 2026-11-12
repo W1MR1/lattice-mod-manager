@@ -1,6 +1,7 @@
 // What the game's own logs say about the mods: the parsers, and how their
-// facts become problems of a profile. The samples follow the formats the
-// loaders write; they are made up, not taken from anyone's machine.
+// facts become problems of a profile. The samples here were written from
+// memory of the formats; gamelog-real.test.ts holds the ones built from the
+// loaders' own source, and is the one to trust and to extend.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -100,8 +101,10 @@ describe('reading loader logs', () => {
     expect(r.failed.map((f) => f.id)).toEqual(['oldplugin', 'broken']);
     const c = parseCetLog(`[2026-11-01 12:00:01 UTC+03:00] [info] CET version v1.35.0 [HEAD]
 [2026-11-01 12:00:02 UTC+03:00] [info] Mod Tool loaded! ('C:\\Games\\Cyberpunk 2077\\bin\\x64\\plugins\\cyber_engine_tweaks\\mods\\Tool')
-[2026-11-01 12:00:02 UTC+03:00] [error] ...ins\\cyber_engine_tweaks\\mods\\Bad\\init.lua:3: attempt to index a nil value`)!;
+[2026-11-01 12:00:02 UTC+03:00] [error] Mod Bad failed to load! ('C:\\Games\\Cyberpunk 2077\\bin\\x64\\plugins\\cyber_engine_tweaks\\mods\\Bad')
+[2026-11-01 12:00:09 UTC+03:00] [error] ...ins\\cyber_engine_tweaks\\mods\\Tool\\init.lua:3: attempt to index a nil value`)!;
     expect(c.loaded).toEqual(['tool']);
+    // only what CET could not load; an error a loaded mod printed later is its own business
     expect(c.failed.map((f) => f.id)).toEqual(['bad']);
     const s = parseRedscriptLog(`[INFO - Sat, 1 Nov 2026 12:00:00 +0300] Compiling files in C:\\Games\\Cyberpunk 2077\\r6\\scripts
 [ERROR - Sat, 1 Nov 2026 12:00:01 +0300] Unresolved reference Foo

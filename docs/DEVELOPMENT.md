@@ -24,7 +24,7 @@ npm run dev
 | `npm run dev` | окно с перезагрузкой при изменениях |
 | `npm run build && npm start` | собрать и запустить без dev-сервера |
 | `npm run typecheck` | проверка типов |
-| `npm test` | 153 теста ядра (около 3 секунд) |
+| `npm test` | 173 тестов ядра (около 3 секунд) |
 | `npm run i18n` | переводы: каких строк не хватает в каждом языке (`-- --sources` — все строки с ключами) |
 | `npm run smoke` | прогон окна во временном профиле: ставит моды с Modrinth, проверяет коллекции, снимает все экраны в `smoke/` |
 | `npm run games` | обновить список игр на BepInEx из реестра Thunderstore (`electron/core/thunderstore-games.json`) |

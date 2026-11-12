@@ -147,9 +147,11 @@ examples and links, are in [SOURCES.md](docs/SOURCES.md) (in Russian).
 Better to learn it here than after installing.
 
 - **Windows only.**
-- **Archive layouts and log parsing are verified on samples,** not on a live
-  Cyberpunk 2077 or Skyrim: the author does not have them at hand. If Lattice
-  laid a mod out wrong, send a problem report — it gets fixed quickly.
+- **Archive layouts are verified on samples,** not on a live Cyberpunk 2077 or
+  Skyrim: the author does not have them at hand. Log parsing is checked against
+  the source code of the loaders themselves (Fabric, BepInEx, SMAPI, RED4ext,
+  Cyber Engine Tweaks, SKSE), but not against a live game either. If Lattice
+  gets something wrong, send a problem report — it gets fixed quickly.
 - **Of the 266 BepInEx games, installing was verified live on eight.** The rest
   install by the same rules from Thunderstore's registry.
 - **No LOOT-style plugin sorting.** The order comes from the mods themselves and
@@ -179,7 +181,7 @@ npm run dev
 ```
 
 Electron, React, TypeScript. The core does not depend on Electron and is covered
-by 153 tests. The developer documentation is in Russian:
+by 173 tests. The developer documentation is in Russian:
 
 - [Development](docs/DEVELOPMENT.md) — commands, structure, how to add a game
 - [How it is tested](docs/TESTING.md) · [Release checklist](docs/RELEASE-CHECKLIST.md)

@@ -144,7 +144,8 @@ function PlanView({ plan, onClose }: { plan: InstallPlan; onClose: () => void })
         </div>
       )}
 
-      {needs && <NexusChecklist planId={plan.id} needs={needs} onNeeds={setNeeds} onReady={() => void apply()} />}
+      {/* the last waited file taken out of the plan leaves nothing to wait for: the plan goes on without the list */}
+      {needs && <NexusChecklist planId={plan.id} needs={needs} onNeeds={(n) => setNeeds(n.length ? n : null)} onReady={() => void apply()} />}
 
       {live.length > 0 && (
         <div className="card">
